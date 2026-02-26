@@ -1,113 +1,65 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+import shutil
+import uuid
+import os
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_ # <--- QUAN TRỌNG: Thêm or_ để tìm kiếm linh hoạt
+from sqlalchemy import select, func, or_, delete, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from pydantic import BaseModel
 
 from src.database import get_db
-from src.bikes.models import Make, Bike, BikeVariant, Category, Color 
+from src.bikes.models import Make, Bike, BikeVariant, Category, Color, TechnicalSpecification, BikeImage
 from src.bikes.schemas import BikeCreate, BikeResponse
 from src.auth.dependencies import get_current_user
 from src.auth.models import User 
 from src.logs.utils import create_audit_log
-
+from src.bikes.schemas import BikeVariantCreate
 router = APIRouter()
 
-# --- SCHEMA NHẬP DỮ LIỆU THUỘC TÍNH ---
-class AttributeCreate(BaseModel):
-    name: str
-    hex_code: Optional[str] = None
-
-# --- SCHEMA UPDATE XE ---
+# --- SCHEMA UPDATE (Định nghĩa tại đây để khớp với logic mới) ---
 class BikeUpdate(BaseModel):
     name: Optional[str] = None
     brand: Optional[str] = None
     type: Optional[str] = None
-    color: Optional[str] = None     
+    
+    # SỬA: Dùng color_id thay vì color string
+    color_id: Optional[int] = None     
+    
     price: Optional[float] = None
     discount_price: Optional[float] = None
     discount_end_date: Optional[str] = None
     engine_cc: Optional[int] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
-    quantity: Optional[int] = None
+    
+    # SỬA: Thêm các trường Flash Sale
+    is_flash_sale: Optional[bool] = None
+    flash_sale_price: Optional[float] = None
+    flash_sale_start: Optional[str] = None 
+    flash_sale_end: Optional[str] = None
+    flash_sale_limit: Optional[int] = None
 
 # --- HÀM KIỂM TRA QUYỀN ---
 def check_staff_permission(user: User):
     if user.role not in ["admin", "staff"] and user.username != "admin":
         raise HTTPException(status_code=403, detail="Bạn không đủ quyền (Cần quyền Staff/Admin)")
 
-# --- HÀM TỰ ĐỘNG TẠO THUỘC TÍNH NẾU CHƯA CÓ ---
-async def ensure_attributes_exist(db: AsyncSession, brand: str = None, type_: str = None, color: str = None):
-    # 1. Brand
+# --- HÀM TỰ ĐỘNG TẠO ATTRIBUTE (Hãng, Loại) ---
+async def ensure_attributes_exist(db: AsyncSession, brand: str = None, type_: str = None):
     if brand:
         make = (await db.execute(select(Make).where(Make.name == brand))).scalar_one_or_none()
         if not make:
             db.add(Make(name=brand, slug=brand.lower().strip().replace(" ", "-")))
-
-    # 2. Category
     if type_:
         cat = (await db.execute(select(Category).where(Category.name == type_))).scalar_one_or_none()
         if not cat:
             db.add(Category(name=type_, slug=type_.lower().strip().replace(" ", "-")))
-
-    # 3. Color
-    if color:
-        col = (await db.execute(select(Color).where(Color.name == color))).scalar_one_or_none()
-        if not col:
-            db.add(Color(name=color))
-            
     await db.flush()
 
 # ==========================================
-# 1. API LẤY DỮ LIỆU BỘ LỌC
-# ==========================================
-@router.get("/filters")
-async def get_filters(db: AsyncSession = Depends(get_db)):
-    makes = (await db.execute(select(Make.name).order_by(Make.name))).scalars().all()
-    cats = (await db.execute(select(Category.name).order_by(Category.name))).scalars().all()
-    colors = (await db.execute(select(Color.name).order_by(Color.name))).scalars().all()
-    
-    return {
-        "brands": makes,
-        "types": cats,
-        "colors": colors
-    }
-
-# ==========================================
-# 2. CÁC API THÊM BỘ LỌC THỦ CÔNG
-# ==========================================
-@router.post("/attributes/makes", status_code=201)
-async def create_make_attribute(data: AttributeCreate, db: AsyncSession = Depends(get_db), u: User = Depends(get_current_user)):
-    check_staff_permission(u)
-    if (await db.execute(select(Make).where(Make.name == data.name))).scalar_one_or_none():
-        raise HTTPException(400, "Hãng xe đã tồn tại")
-    db.add(Make(name=data.name, slug=data.name.lower().replace(" ", "-")))
-    await db.commit()
-    return {"message": "Đã thêm hãng xe"}
-
-@router.post("/attributes/categories", status_code=201)
-async def create_category_attribute(data: AttributeCreate, db: AsyncSession = Depends(get_db), u: User = Depends(get_current_user)):
-    check_staff_permission(u)
-    if (await db.execute(select(Category).where(Category.name == data.name))).scalar_one_or_none():
-        raise HTTPException(400, "Loại xe đã tồn tại")
-    db.add(Category(name=data.name, slug=data.name.lower().replace(" ", "-")))
-    await db.commit()
-    return {"message": "Đã thêm loại xe"}
-
-@router.post("/attributes/colors", status_code=201)
-async def create_color_attribute(data: AttributeCreate, db: AsyncSession = Depends(get_db), u: User = Depends(get_current_user)):
-    check_staff_permission(u)
-    if (await db.execute(select(Color).where(Color.name == data.name))).scalar_one_or_none():
-        raise HTTPException(400, "Màu sắc đã tồn tại")
-    db.add(Color(name=data.name, hex_code=data.hex_code))
-    await db.commit()
-    return {"message": "Đã thêm màu sắc"}
-
-# ==========================================
-# 3. API TẠO XE MỚI (FIXED: LƯU TẤT CẢ BIẾN THỂ MÀU)
+# 1. API TẠO XE MỚI (Full Option: Specs + Variants)
 # ==========================================
 @router.post("/", response_model=BikeResponse, status_code=status.HTTP_201_CREATED)
 async def create_bike(
@@ -117,136 +69,157 @@ async def create_bike(
 ):
     check_staff_permission(current_user)
 
-    # 1. Chuẩn bị dữ liệu
+    # 1. Tách dữ liệu
     bike_data = bike_in.model_dump()
     variants_data = bike_data.pop('variants', [])
+    specs_data = bike_data.pop('specs', None) # Lấy dữ liệu Specs
+
+    # 2. Xử lý Hãng xe & Loại xe
+    await ensure_attributes_exist(db, brand=bike_data.get('brand'), type_=bike_data.get('type'))
     
-    # --- LOGIC MỚI: QUÉT TẤT CẢ BIẾN THỂ ĐỂ TẠO BỘ LỌC MÀU ---
-    # Duyệt qua từng biến thể để thêm màu vào bảng Color nếu chưa có
-    if variants_data:
-        for variant in variants_data:
-             await ensure_attributes_exist(db, color=variant.get('name'))
+    # Lấy ID hãng xe nếu chưa có
+    if not bike_data.get('make_id') and bike_data.get('brand'):
+        make = (await db.execute(select(Make).where(Make.name == bike_data.get('brand')))).scalar_one()
+        bike_data['make_id'] = make.id
     
-    # Nếu chưa nhập màu chính, lấy màu đầu tiên làm đại diện
-    if not bike_data.get('color') and variants_data:
-        bike_data['color'] = variants_data[0].get('name')
-    # -------------------------------------------------------
+    bike_data.pop('brand', None) # Bỏ field brand thừa vì đã có make_id
 
-    # 2. Tự động thêm bộ lọc Hãng/Loại vào Database nếu chưa có
-    await ensure_attributes_exist(
-        db, 
-        brand=bike_data.get('brand'), 
-        type_=bike_data.get('type'),
-        color=bike_data.get('color') # Vẫn lưu màu chính
-    )
-
-    # 3. Xử lý Hãng xe
-    make = (await db.execute(select(Make).where(Make.name == bike_data.get('brand')))).scalar_one()
-
-    bike_data.pop('brand', None)
-    bike_data.pop('make_id', None)
-
+    # 3. Tạo Slug
     if not bike_data.get('slug'):
-        bike_data['slug'] = bike_data['name'].lower().strip().replace(" ", "-")
+        bike_data['slug'] = bike_data['name'].lower().strip().replace(" ", "-") + "-" + str(uuid.uuid4().hex[:4])
 
-    # 4. Tạo Xe
-    new_bike = Bike(**bike_data, make_id=make.id)
+    # 4. Tạo đối tượng Xe
+    new_bike = Bike(**bike_data)
     
-    # 5. Tạo Biến thể
+    # 5. Thêm Biến thể (Variants)
     for variant in variants_data:
         new_bike.variants.append(BikeVariant(**variant))
     
+    # 6. Thêm Thông số kỹ thuật (Specs) - MỚI
+    if specs_data:
+        new_specs = TechnicalSpecification(**specs_data)
+        new_bike.specs = new_specs
+
     db.add(new_bike)
+    
     try:
-        await create_audit_log(
-            db, 
-            username=current_user.username,
-            action="Thêm xe mới", 
-            target=f"Xe: {new_bike.name}",
-            details={"price": new_bike.price, "qty": new_bike.quantity}
-        )
-        
         await db.commit()
+        await db.refresh(new_bike)
         
+        # Reload để trả về full data
         result = await db.execute(
             select(Bike)
-            .options(selectinload(Bike.make), selectinload(Bike.variants))
+            .options(
+                selectinload(Bike.make), 
+                selectinload(Bike.variants),
+                selectinload(Bike.specs), # Load thêm specs
+                selectinload(Bike.images) # Load thêm ảnh
+            )
             .where(Bike.id == new_bike.id)
         )
         return result.scalar_one()
-        
-    except IntegrityError:
+
+    except IntegrityError as e:
         await db.rollback() 
-        raise HTTPException(status_code=400, detail="Sản phẩm đã tồn tại (trùng tên hoặc slug).")
+        print(f"Lỗi DB: {e}")
+        raise HTTPException(status_code=400, detail="Lỗi dữ liệu: Có thể trùng tên hoặc mã màu không tồn tại.")
 
 # ==========================================
-# 4. API LẤY DANH SÁCH XE (FIXED: TÌM MÀU TRONG CẢ BIẾN THỂ)
+# 2. API UPLOAD GALLERY ẢNH (MỚI TOANH)
 # ==========================================
-@router.get("/")
-async def list_bikes(
-    page: int = Query(1, ge=1),
-    size: int = Query(12, ge=1),
-    brand: Optional[str] = None,
-    type: Optional[str] = None,
-    color: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    min_cc: Optional[int] = None,
-    max_cc: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+@router.post("/{bike_id}/gallery", status_code=201)
+async def upload_bike_gallery(
+    bike_id: int,
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    stmt = select(Bike).options(selectinload(Bike.make), selectinload(Bike.variants))
+    """Upload nhiều ảnh cùng lúc cho một xe"""
+    check_staff_permission(current_user)
 
-    if brand:
-        stmt = stmt.join(Make).where(Make.name.ilike(f"%{brand}%"))
-    if type:
-        stmt = stmt.where(Bike.type.ilike(f"%{type}%"))
+    # Kiểm tra xe có tồn tại không
+    bike = await db.get(Bike, bike_id)
+    if not bike:
+        raise HTTPException(404, "Xe không tồn tại")
+
+    saved_images = []
     
-    # --- LOGIC TÌM KIẾM MÀU NÂNG CAO ---
-    if color:
-        # Tìm xe có Màu Chính chứa từ khóa HOẶC có Biến Thể chứa từ khóa
-        stmt = stmt.outerjoin(BikeVariant).where(
-            or_(
-                Bike.color.ilike(f"%{color}%"),      # Màu chính (VD: Cam)
-                BikeVariant.name.ilike(f"%{color}%") # Màu biến thể (VD: Xanh Dương Đậm)
-            )
-        ).distinct() # Dùng distinct để tránh 1 xe hiện nhiều lần nếu khớp nhiều biến thể
-    # -----------------------------------
+    # Tạo thư mục nếu chưa có
+    upload_dir = "static/uploads/bikes"
+    os.makedirs(upload_dir, exist_ok=True)
 
-    if min_price is not None:
-        stmt = stmt.where(Bike.price >= min_price)
-    if max_price is not None:
-        stmt = stmt.where(Bike.price <= max_price)
-    if min_cc is not None:
-        stmt = stmt.where(Bike.engine_cc >= min_cc)
-    if max_cc is not None:
-        stmt = stmt.where(Bike.engine_cc <= max_cc)
+    for file in files:
+        # Validate file ảnh
+        if not file.content_type.startswith("image/"):
+            continue
+            
+        file_ext = file.filename.split(".")[-1]
+        unique_name = f"{bike_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
+        file_path = f"{upload_dir}/{unique_name}"
+        
+        # Lưu file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Tạo URL (Lưu ý: trên production nên dùng domain thật)
+        url = f"http://localhost:8000/{file_path}"
+        
+        # Lưu vào DB
+        new_img = BikeImage(bike_id=bike_id, image_url=url, is_primary=False)
+        db.add(new_img)
+        saved_images.append(url)
 
-    # Đếm tổng số lượng (distinct ID để chính xác)
-    count_stmt = select(func.count(func.distinct(Bike.id))).select_from(stmt.subquery())
-    total_result = await db.execute(count_stmt)
-    total_items = total_result.scalar() or 0
-
-    offset = (page - 1) * size
-    stmt = stmt.limit(size).offset(offset)
-    
-    result = await db.execute(stmt)
-    bikes = result.scalars().all()
-
-    return {
-        "items": bikes,
-        "total": total_items,
-        "page": page,
-        "size": size,
-        "total_pages": (total_items + size - 1) // size if total_items > 0 else 1
-    }
+    await db.commit()
+    return {"message": f"Đã upload {len(saved_images)} ảnh", "urls": saved_images}
 
 # ==========================================
-# 5. API LẤY CHI TIẾT XE
+# 3. API SET ẢNH ĐẠI DIỆN (Set Primary)
+# ==========================================
+@router.put("/gallery/{image_id}/set-primary")
+async def set_primary_image(
+    image_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    check_staff_permission(current_user)
+    
+    # Lấy ảnh cần set
+    target_img = await db.get(BikeImage, image_id)
+    if not target_img:
+        raise HTTPException(404, "Ảnh không tồn tại")
+        
+    # Reset tất cả ảnh của xe đó về false
+    await db.execute(
+        update(BikeImage)
+        .where(BikeImage.bike_id == target_img.bike_id)
+        .values(is_primary=False)
+    )
+    
+    # Set ảnh này thành true
+    target_img.is_primary = True
+    
+    # Cập nhật luôn vào bảng Bike (để query list nhanh hơn)
+    bike = await db.get(Bike, target_img.bike_id)
+    bike.image_url = target_img.image_url
+    
+    await db.commit()
+    return {"message": "Đã đặt làm ảnh đại diện"}
+
+# ==========================================
+# 4. API LẤY CHI TIẾT XE (UPDATE: Load thêm Specs & Gallery)
 # ==========================================
 @router.get("/{bike_id}", response_model=BikeResponse)
 async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
-    query = select(Bike).where(Bike.id == bike_id).options(selectinload(Bike.make), selectinload(Bike.variants))
+    query = (
+        select(Bike)
+        .where(Bike.id == bike_id)
+        .options(
+            selectinload(Bike.make), 
+            selectinload(Bike.variants),
+            selectinload(Bike.specs), # <--- Load Specs
+            selectinload(Bike.images) # <--- Load Gallery
+        )
+    )
     result = await db.execute(query)
     bike = result.scalar_one_or_none()
     
@@ -255,7 +228,79 @@ async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
     return bike
 
 # ==========================================
-# 6. API CẬP NHẬT XE (FIXED: CẬP NHẬT FILTER KHI ĐỔI MÀU)
+# 5. API LIST BIKES (UPDATE: Logic lọc màu theo color_id hoặc Variant)
+# ==========================================
+@router.get("/")
+async def list_bikes(
+    page: int = Query(1, ge=1),
+    size: int = Query(12, ge=1),
+    brand: Optional[str] = None,
+    type: Optional[str] = None,
+    color: Optional[str] = None, # color ở đây là tìm theo tên
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    is_flash_sale: Optional[bool] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(Bike).options(
+        selectinload(Bike.make), 
+        selectinload(Bike.variants),
+        selectinload(Bike.images) # Load ảnh để hiển thị thumbnail
+    )
+
+    if brand: stmt = stmt.join(Make).where(Make.name.ilike(f"%{brand}%"))
+    if type: stmt = stmt.where(Bike.type.ilike(f"%{type}%"))
+    if is_flash_sale: stmt = stmt.where(Bike.is_flash_sale == True)
+    
+    # Logic tìm màu (Hỗ trợ cả bảng Color và Variant)
+    if color:
+        stmt = stmt.outerjoin(BikeVariant).outerjoin(Color).where(
+            or_(
+                Color.name.ilike(f"%{color}%"),
+                BikeVariant.name.ilike(f"%{color}%")
+            )
+        ).distinct()
+
+    if min_price: stmt = stmt.where(Bike.price >= min_price)
+    if max_price: stmt = stmt.where(Bike.price <= max_price)
+
+    # Đếm tổng
+    count_stmt = select(func.count(func.distinct(Bike.id))).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    # Phân trang
+    stmt = stmt.limit(size).offset((page - 1) * size)
+    bikes = (await db.execute(stmt)).scalars().all()
+
+    return {
+        "items": bikes,
+        "total": total,
+        "page": page,
+        "size": size,
+        "total_pages": (total + size - 1) // size if total > 0 else 1
+    }
+
+# ==========================================
+# 6. API XOÁ ẢNH TRONG GALLERY
+# ==========================================
+@router.delete("/gallery/{image_id}")
+async def delete_gallery_image(
+    image_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    check_staff_permission(current_user)
+    
+    img = await db.get(BikeImage, image_id)
+    if not img:
+        raise HTTPException(404, "Ảnh không tồn tại")
+
+    await db.delete(img)
+    await db.commit()
+    return {"message": "Đã xóa ảnh"}
+
+# ==========================================
+# 7. API CẬP NHẬT XE (ĐÃ FIX LỖI MissingGreenlet)
 # ==========================================
 @router.put("/{bike_id}", response_model=BikeResponse)
 async def update_bike(
@@ -266,48 +311,37 @@ async def update_bike(
 ):
     check_staff_permission(current_user)
 
-    query = select(Bike).where(Bike.id == bike_id).options(selectinload(Bike.make), selectinload(Bike.variants))
+    # --- FIX: Load đầy đủ các quan hệ (Make, Variants, Specs, Images) ---
+    query = (
+        select(Bike)
+        .where(Bike.id == bike_id)
+        .options(
+            selectinload(Bike.make),
+            selectinload(Bike.variants),
+            selectinload(Bike.specs),
+            selectinload(Bike.images)
+        )
+    )
+    # -------------------------------------------------------------------
+    
     result = await db.execute(query)
     bike = result.scalar_one_or_none()
     if not bike: raise HTTPException(404, "Không tìm thấy sản phẩm.")
     
-    # Tự động thêm bộ lọc mới nếu cần
-    await ensure_attributes_exist(db, bike_update.brand, bike_update.type, bike_update.color)
-
-    # Logic cập nhật Hãng xe
-    if bike_update.brand and bike_update.brand != bike.brand:
-        make = (await db.execute(select(Make).where(Make.name == bike_update.brand))).scalar_one()
-        bike.make_id = make.id
-        bike.brand = bike_update.brand
-
-    # Cập nhật các trường khác
-    old_price = bike.price
-    old_qty = bike.quantity
-    
+    # Cập nhật các trường
     update_data = bike_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        if key != 'brand': 
-            setattr(bike, key, value)
+        if hasattr(bike, key):
+             setattr(bike, key, value)
     
-    # Ghi log
-    if old_price != bike.price or old_qty != bike.quantity:
-        await create_audit_log(
-            db, 
-            username=current_user.username,
-            action="Cập nhật xe", 
-            target=f"Xe #{bike.id} ({bike.name})",
-            details={
-                "price_change": f"{old_price:,.0f} -> {bike.price:,.0f}",
-                "qty_change": f"{old_qty} -> {bike.quantity}"
-            }
-        )
-
     await db.commit()
-    await db.refresh(bike)
+    
+    # Không cần refresh đơn thuần, mà nên trả về object đã có đủ quan hệ
+    # (Vì variants/specs/images đã được load ở trên và vẫn nằm trong session)
     return bike
 
 # ==========================================
-# 7. API XÓA XE
+# 8. API XÓA XE
 # ==========================================
 @router.delete("/{bike_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bike(
@@ -316,15 +350,40 @@ async def delete_bike(
     current_user: User = Depends(get_current_user)
 ):
     check_staff_permission(current_user)
-
-    query = select(Bike).where(Bike.id == bike_id)
-    result = await db.execute(query)
-    bike = result.scalar_one_or_none()
-    
+    bike = await db.get(Bike, bike_id)
     if not bike: raise HTTPException(404, "Sản phẩm không tồn tại.")
     
     await create_audit_log(db, current_user.username, "Xóa xe", f"Xe: {bike.name}", "warning")
-
     await db.delete(bike)
     await db.commit()
     return None
+# ==========================================
+# 9. API TẠO NHIỀU BIẾN THỂ (CHO QUY TRÌNH UPLOAD ẢNH TRƯỚC)
+# ==========================================
+@router.post("/{bike_id}/variants/bulk", status_code=201)
+async def create_bulk_variants(
+    bike_id: int,
+    variants: List[BikeVariantCreate],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    check_staff_permission(current_user)
+    
+    bike = await db.get(Bike, bike_id)
+    if not bike:
+        raise HTTPException(404, "Xe không tồn tại")
+
+    for v in variants:
+        # Nếu variant gửi lên không có ảnh, thử lấy ảnh đại diện của xe
+        img = v.image_url if v.image_url else bike.image_url
+        new_variant = BikeVariant(
+            bike_id=bike_id,
+            name=v.name,
+            price=v.price,
+            quantity=v.quantity,
+            image_url=img
+        )
+        db.add(new_variant)
+
+    await db.commit()
+    return {"message": f"Đã thêm {len(variants)} biến thể"}
