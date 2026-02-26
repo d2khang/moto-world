@@ -6,7 +6,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi import Request
 # --- IMPORT DATABASE & MODELS ---
 from src.database import get_db, engine, Base
 from src.auth import models as auth_models 
@@ -24,7 +26,7 @@ from src.users.router import router as users_router
 from src.logs.router import router as logs_router
 from src.notifications.router import router as notifications_router 
 from src.promo.router import router as promo_router
-# Import Router Chat AI mà chúng ta đã tách riêng
+
 from src.chat.router import router as chat_router 
 
 app = FastAPI(title="Moto World API", version="1.0.0")
@@ -110,3 +112,7 @@ async def upload_avatar(
     db.add(current_user)
     await db.commit()
     return {"url": avatar_url}
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print("❌ VALIDATION ERROR CHI TIẾT:", exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})

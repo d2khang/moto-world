@@ -1,203 +1,210 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { Edit, Trash2, Plus, Package, Search, AlertCircle, ArrowDown, ArrowUpRight } from 'lucide-react'
-// 1. Import toast
+import { 
+  Edit, Trash2, Plus, Package, Search, AlertCircle, 
+  ArrowDown, ArrowUpRight, Database, RefreshCw 
+} from 'lucide-react'
 import toast from 'react-hot-toast'
 
 function AdminBikeManager() {
   const [bikes, setBikes] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const navigate = useNavigate()
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
-  // 1. Lấy danh sách xe
+  // 1. Hàm lấy dữ liệu
   const fetchBikes = async () => {
+    setIsRefreshing(true)
     try {
       const res = await axios.get('http://localhost:8000/api/bikes/?size=100')
       const bikeData = res.data.items ? res.data.items : res.data
-      
-      if (Array.isArray(bikeData)) {
-        setBikes(bikeData)
-      } else {
-        setBikes([])
-        console.error("Dữ liệu không đúng định dạng:", bikeData)
-      }
+      setBikes(Array.isArray(bikeData) ? bikeData : [])
     } catch (error) {
-      console.error("Lỗi tải xe:", error)
-      toast.error("Không thể tải danh sách xe. Vui lòng thử lại!")
+      toast.error("Không thể đồng bộ dữ liệu kho!")
     } finally {
       setLoading(false)
+      setIsRefreshing(false)
     }
   }
 
-  useEffect(() => {
-    fetchBikes()
-  }, [])
+  useEffect(() => { fetchBikes() }, [])
 
-  // 2. Xử lý xóa xe
   const handleDelete = async (id, name) => {
-    if (window.confirm(`⚠️ CẢNH BÁO: Bạn có chắc muốn xóa xe "${name}" không? Hành động này không thể hoàn tác!`)) {
+    if (window.confirm(`Xác nhận xóa vĩnh viễn dòng xe "${name}"?`)) {
       const token = localStorage.getItem('token')
-      const toastId = toast.loading("Đang xóa xe...");
-      
       try {
         await axios.delete(`http://localhost:8000/api/bikes/${id}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
-        
         setBikes(bikes.filter(bike => bike.id !== id))
-        toast.success(`Đã xóa xe "${name}" thành công!`, { id: toastId })
-        
+        toast.success("Đã dọn dẹp dữ liệu")
       } catch (error) {
-        console.error(error)
-        const msg = error.response?.data?.detail || "Lỗi không xác định"
-        toast.error(`Xóa thất bại: ${msg}`, { id: toastId })
+        toast.error("Lỗi khi xóa")
       }
     }
   }
 
-  const filteredBikes = bikes.filter(bike => 
+  // --- LOGIC XỬ LÝ DỮ LIỆU THÔNG MINH ---
+  
+  // A. Khử trùng lặp (Fix lỗi 17 xe rác)
+  const uniqueBikes = useMemo(() => {
+    const map = new Map();
+    bikes.forEach(item => {
+        if (!map.has(item.id)) map.set(item.id, item);
+    });
+    return Array.from(map.values());
+  }, [bikes]);
+
+  // B. Hàm tính tồn kho thực tế cho từng xe (Cơ chế tính toán kép)
+  const getRealStock = (bike) => {
+    // Ưu tiên dùng total_quantity từ backend, nếu bằng 0 hoặc ko có thì tự cộng dồn variants
+    if (bike.total_quantity && bike.total_quantity > 0) return bike.total_quantity;
+    if (bike.variants && bike.variants.length > 0) {
+        return bike.variants.reduce((sum, v) => sum + (v.quantity || 0), 0);
+    }
+    return bike.quantity || 0; // Cuối cùng mới dùng cột quantity cũ
+  };
+
+  // C. Tìm kiếm
+  const filteredBikes = uniqueBikes.filter(bike => 
     bike.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (bike.make?.name || bike.brand || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
 
+  // D. Tính tổng số xe toàn bộ cửa hàng (Header)
+  const totalUnitsInStock = uniqueBikes.reduce((sum, bike) => sum + getRealStock(bike), 0)
+
   return (
-    <div className="min-h-screen bg-slate-900 p-8 text-white pb-20 pt-24">
+    <div className="min-h-screen bg-slate-950 text-slate-200 pb-20 pt-24 px-4 md:px-8 font-sans">
       <div className="max-w-7xl mx-auto">
         
-        {/* HEADER */}
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-          <div>
-             <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500 uppercase tracking-tighter flex items-center gap-2">
-                <Package className="text-green-500" /> Quản Lý Kho Xe
-             </h1>
-             <p className="text-gray-400 text-sm mt-1">Tổng số xe hiện có: <span className="text-white font-bold">{bikes.length}</span></p>
-          </div>
-          
-          <div className="flex gap-4 w-full md:w-auto">
-             <div className="relative flex-1 md:w-64">
-                <Search className="absolute left-3 top-3 text-gray-500 w-4 h-4"/>
-                <input 
-                  type="text" 
-                  placeholder="Tìm tên xe, hãng..." 
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:border-green-500 outline-none text-white placeholder-slate-500"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-             </div>
-             <Link to="/admin/add-bike" className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-lg transition whitespace-nowrap active:scale-95">
-                <Plus size={18} /> Thêm Xe
-             </Link>
-          </div>
+        {/* HEADER: THỐNG KÊ */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+                <div className="flex items-center gap-4 text-green-400 mb-2">
+                    <Package size={24}/>
+                    <span className="text-xs font-black uppercase tracking-widest">Dòng xe</span>
+                </div>
+                <div className="text-4xl font-black text-white">{uniqueBikes.length} <span className="text-sm text-slate-500 font-bold ml-2">Model</span></div>
+            </div>
+
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+                <div className="flex items-center gap-4 text-blue-400 mb-2">
+                    <Database size={24}/>
+                    <span className="text-xs font-black uppercase tracking-widest">Tổng kho</span>
+                </div>
+                <div className="text-4xl font-black text-white">{totalUnitsInStock} <span className="text-sm text-slate-500 font-bold ml-2">Chiếc</span></div>
+            </div>
+
+            <div className="flex flex-col justify-between gap-3">
+                <div className="relative">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 w-5 h-5"/>
+                    <input 
+                        type="text" placeholder="Tìm kiếm..." 
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm outline-none focus:border-green-500/50 transition-all"
+                        value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={fetchBikes} disabled={isRefreshing} className="p-3 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition disabled:opacity-50">
+                        <RefreshCw size={20} className={`${isRefreshing ? 'animate-spin' : ''}`} />
+                    </button>
+                    <Link to="/admin/add-bike" className="flex-1 bg-green-600 hover:bg-green-500 text-white rounded-xl font-black flex items-center justify-center gap-2 uppercase tracking-widest text-xs">
+                        <Plus size={18} /> Đăng Xe Mới
+                    </Link>
+                </div>
+            </div>
         </div>
 
-        {/* BẢNG DANH SÁCH */}
-        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-2xl">
+        {/* BẢNG DỮ LIỆU */}
+        <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left">
               <thead>
-                <tr className="bg-slate-900/50 text-gray-400 text-[10px] font-black uppercase tracking-wider border-b border-slate-700">
-                  <th className="p-4">Hình ảnh</th>
-                  <th className="p-4">Tên xe / Hãng</th>
-                  <th className="p-4">Giá / Khuyến Mãi</th>
-                  <th className="p-4 text-center">Tồn kho</th>
-                  <th className="p-4 text-center">Hành động</th>
+                <tr className="bg-slate-800/30 text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] border-b border-slate-800">
+                  <th className="p-6">Sản phẩm</th>
+                  <th className="p-6">Thông tin</th>
+                  <th className="p-6">Giá bán</th>
+                  <th className="p-6 text-center">Tồn kho tổng</th>
+                  <th className="p-6 text-right">Thao tác</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700">
+              <tbody className="divide-y divide-slate-800/50">
                 {loading ? (
-                   <tr><td colSpan="5" className="p-8 text-center text-gray-500 animate-pulse uppercase font-bold tracking-widest">Đang tải dữ liệu kho...</td></tr>
+                   <tr><td colSpan="5" className="p-32 text-center text-slate-600 animate-pulse font-black">ĐANG TẢI...</td></tr>
                 ) : filteredBikes.length === 0 ? (
-                   <tr><td colSpan="5" className="p-8 text-center text-gray-500 italic">Không tìm thấy xe nào phù hợp.</td></tr>
+                   <tr><td colSpan="5" className="p-32 text-center text-slate-500 italic">Kho hàng trống.</td></tr>
                 ) : (
-                  filteredBikes.map((bike) => (
-                    <tr key={bike.id} className="hover:bg-slate-700/30 transition group">
-                      <td className="p-4">
-                        <div className="w-16 h-12 rounded-lg overflow-hidden border border-slate-600 relative bg-slate-900">
-                           <img src={bike.image_url || "https://via.placeholder.com/150"} alt={bike.name} className="w-full h-full object-cover" />
-                           {bike.discount_price && (
-                              <div className="absolute top-0 right-0 bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-bl-md shadow-sm">SALE</div>
-                           )}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-white text-sm group-hover:text-green-400 transition-colors">{bike.name}</div>
-                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">{bike.make?.name || bike.brand} • {bike.type}</div>
-                      </td>
-                      
-                      <td className="p-4">
-                        {bike.discount_price ? (
-                            <div>
-                                <div className="text-[10px] text-gray-500 line-through font-bold">
-                                    {new Intl.NumberFormat('vi-VN').format(bike.price)} ₫
-                                </div>
-                                <div className="font-mono text-red-400 font-black text-sm flex items-center gap-1">
-                                    <ArrowDown size={12}/> {new Intl.NumberFormat('vi-VN').format(bike.discount_price)} ₫
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="font-mono text-green-400 font-bold text-sm">
-                                {new Intl.NumberFormat('vi-VN').format(bike.price)} ₫
-                            </div>
-                        )}
-                      </td>
+                  filteredBikes.map((bike) => {
+                    const currentStock = getRealStock(bike);
+                    return (
+                      <tr key={bike.id} className="hover:bg-slate-800/20 transition-colors group">
+                        <td className="p-6">
+                          <div className="w-24 h-16 rounded-xl overflow-hidden border border-slate-700 bg-black">
+                              <img src={bike.image_url || "https://via.placeholder.com/150"} alt={bike.name} className="w-full h-full object-cover" />
+                          </div>
+                        </td>
 
-                      <td className="p-4 text-center">
-                        {bike.quantity <= 0 ? (
-                            <span className="bg-red-500/10 text-red-500 px-2 py-1 rounded text-[10px] font-black border border-red-500/20 uppercase">Hết hàng</span>
-                        ) : bike.quantity <= 3 ? (
-                            <span className="bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded text-[10px] font-black border border-yellow-500/20 uppercase">Sắp hết ({bike.quantity})</span>
-                        ) : (
-                            <span className="bg-slate-700 text-white px-3 py-1 rounded text-xs font-bold border border-slate-600">{bike.quantity}</span>
-                        )}
-                      </td>
-                      
-                      <td className="p-4">
-                        <div className="flex justify-center gap-2">
-                          {/* Nút Xem chi tiết (Mới thêm) */}
-                          <Link 
-                            to={`/bikes/${bike.id}`}
-                            className="p-2 bg-slate-700 hover:bg-slate-600 text-gray-300 hover:text-white rounded-lg transition"
-                            title="Xem trang hiển thị"
-                            target="_blank"
-                          >
-                             <ArrowUpRight size={16} />
-                          </Link>
+                        <td className="p-6">
+                          <div className="font-black text-white text-base uppercase tracking-tight">{bike.name}</div>
+                          <div className="text-[10px] bg-slate-950 text-slate-400 px-2 py-0.5 rounded inline-block font-black uppercase border border-slate-800 mt-2">
+                             {bike.make?.name || bike.brand}
+                          </div>
+                        </td>
+                        
+                        <td className="p-6 font-mono text-sm font-black text-green-500">
+                          {new Intl.NumberFormat('vi-VN').format(bike.price)} ₫
+                        </td>
 
-                          <Link 
-                            to={`/admin/edit-bike/${bike.id}`}
-                            className="p-2 bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white rounded-lg transition"
-                            title="Sửa thông tin"
-                          >
-                             <Edit size={16} />
-                          </Link>
-                          
-                          <button 
-                            onClick={() => handleDelete(bike.id, bike.name)}
-                            className="p-2 bg-red-600/10 hover:bg-red-600 text-red-500 hover:text-white rounded-lg transition"
-                            title="Xóa xe"
-                          >
-                             <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                        <td className="p-6 text-center">
+                          <div className="inline-flex flex-col items-center">
+                              {/* HIỂN THỊ CON SỐ 4 CHUẨN XÁC NHẤT */}
+                              <div className={`text-xl font-black px-6 py-2 rounded-2xl border shadow-xl ${
+                                  currentStock <= 0 ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-slate-950 text-green-400 border-slate-800'
+                              }`}>
+                                  {currentStock}
+                              </div>
+                              
+                              {/* CHẤM MÀU CHI TIẾT */}
+                              <div className="flex justify-center -space-x-1.5 mt-3">
+                                  {bike.variants?.map((v, idx) => (
+                                      <div key={idx} className="group/v relative">
+                                          <div 
+                                              className="w-4 h-4 rounded-full border-2 border-slate-900 shadow-lg cursor-help transition-transform hover:scale-125 hover:z-10" 
+                                              style={{ backgroundColor: v.color_hex || '#475569' }}
+                                              title={`${v.name}: ${v.quantity} xe`}
+                                          ></div>
+                                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/v:block bg-white text-black text-[9px] font-black px-2 py-1 rounded shadow-xl whitespace-nowrap z-50">
+                                              {v.name.toUpperCase()}: {v.quantity} XE
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+                          </div>
+                        </td>
+                        
+                        <td className="p-6 text-right">
+                          <div className="flex justify-end gap-3 opacity-40 group-hover:opacity-100 transition-opacity">
+                            <Link to={`/bikes/${bike.id}`} target="_blank" className="p-2.5 bg-slate-950 hover:bg-slate-800 text-slate-400 rounded-xl border border-slate-800">
+                               <ArrowUpRight size={18} />
+                            </Link>
+                            <Link to={`/admin/edit-bike/${bike.id}`} className="p-2.5 bg-blue-500/10 text-blue-500 rounded-xl border border-blue-500/20">
+                               <Edit size={18} />
+                            </Link>
+                            <button onClick={() => handleDelete(bike.id, bike.name)} className="p-2.5 bg-red-500/10 text-red-500 rounded-xl border border-red-500/20">
+                               <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
         </div>
-        
-        <div className="mt-6 flex items-start gap-3 bg-blue-900/10 border border-blue-800/30 p-4 rounded-xl text-sm text-blue-200">
-           <AlertCircle className="w-5 h-5 flex-shrink-0 text-blue-400 mt-0.5" />
-           <p className="opacity-80 leading-relaxed">
-             Đây là trang quản trị kho hàng. Tại đây bạn có thể kiểm soát số lượng tồn kho, cập nhật giá bán hoặc gỡ bỏ các sản phẩm. 
-             Mọi thay đổi quan trọng sẽ được hệ thống tự động ghi lại vào <Link to="/admin/logs" className="font-bold underline hover:text-white decoration-blue-400 underline-offset-2">Nhật ký hoạt động</Link>.
-           </p>
-        </div>
-
       </div>
     </div>
   )
