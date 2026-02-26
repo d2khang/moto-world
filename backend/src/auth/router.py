@@ -19,12 +19,15 @@ from src.auth.models import User
 router = APIRouter()
 
 # ==========================================
-# CẤU HÌNH GMAIL CỦA BẠN
+# CẤU HÌNH GMAIL (ĐÃ BẢO MẬT)
 # ==========================================
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "motoworld6699@gmail.com"   
-SENDER_PASSWORD = "fqol jikl fxzx jmsx"        
+
+# 👇 QUAN TRỌNG: Lấy từ settings thay vì điền trực tiếp
+# (Nó sẽ tự đọc từ file .env của bạn)
+SENDER_EMAIL = settings.MAIL_USERNAME
+SENDER_PASSWORD = settings.MAIL_PASSWORD      
 
 # ==========================================
 # 1. CÁC PYDANTIC MODEL (SCHEMA)
@@ -58,6 +61,11 @@ class ResetPasswordRequest(BaseModel):
 # 2. HÀM GỬI EMAIL (HTML CHUYÊN NGHIỆP)
 # ==========================================
 def send_otp_email(to_email: str, otp: str):
+    # Kiểm tra xem đã cấu hình email chưa
+    if not SENDER_EMAIL or not SENDER_PASSWORD:
+        print("❌ LỖI: Chưa cấu hình Email trong file .env")
+        return False
+
     try:
         subject = "🔐 Moto World - Mã Xác Thực Đặt Lại Mật Khẩu"
         
