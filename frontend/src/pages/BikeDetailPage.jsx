@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom' 
 import axios from 'axios'
 import { 
-  ArrowLeft, Check, ShoppingCart, Zap, Trash2, Edit, X, ShieldCheck, 
-  Ruler, Settings, Wrench, Tag, Clock, Star, Scale, Info, Gauge, Fuel
+  ArrowLeft, ShoppingCart, Zap, Trash2, Edit, X, ShieldCheck, 
+  Ruler, Settings, Tag, Clock, Star, Scale, Info, Gauge 
 } from 'lucide-react'
 import { useCart } from '../context/CartContext'
 import { useCompare } from '../context/CompareContext' 
@@ -15,7 +15,7 @@ function BikeDetailPage() {
   
   const [bike, setBike] = useState(null)
   const [selectedVariant, setSelectedVariant] = useState(null)
-  const [activeImage, setActiveImage] = useState(null) // State cho ảnh đang hiển thị
+  const [activeImage, setActiveImage] = useState(null)
   const [loading, setLoading] = useState(true)
   const [timeLeft, setTimeLeft] = useState(null)
 
@@ -32,12 +32,12 @@ function BikeDetailPage() {
         const res = await axios.get(`http://localhost:8000/api/bikes/${id}`)
         setBike(res.data)
         
-        // Mặc định chọn biến thể đầu tiên (nếu có)
+        // Mặc định chọn biến thể đầu tiên
         if (res.data.variants && res.data.variants.length > 0) {
             setSelectedVariant(res.data.variants[0])
         }
 
-        // Mặc định chọn ảnh đầu tiên từ Gallery (nếu có), hoặc ảnh đại diện
+        // Mặc định chọn ảnh đầu tiên từ Gallery hoặc ảnh đại diện
         const firstImg = (res.data.images && res.data.images.length > 0) 
             ? res.data.images[0].image_url 
             : res.data.image_url
@@ -56,8 +56,6 @@ function BikeDetailPage() {
   // 2. LOGIC ĐẾM NGƯỢC FLASH SALE
   useEffect(() => {
     if (!bike) return;
-    
-    // Ưu tiên dùng giờ Flash Sale nếu có, không thì dùng Discount thường
     const endDate = bike.is_flash_sale ? bike.flash_sale_end : bike.discount_end_date;
     if (!endDate) return;
 
@@ -80,7 +78,7 @@ function BikeDetailPage() {
     return () => clearInterval(timer);
   }, [bike]);
 
-  // 3. XỬ LÝ KHI CHỌN BIẾN THỂ -> ĐỔI ẢNH TƯƠNG ỨNG
+  // 3. ĐỔI ẢNH KHI CHỌN MÀU
   useEffect(() => {
       if (selectedVariant && selectedVariant.image_url) {
           setActiveImage(selectedVariant.image_url)
@@ -111,23 +109,18 @@ function BikeDetailPage() {
 
   const formatPrice = (price) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price || 0)
 
-  // --- RENDER GIÁ (Hỗ trợ Flash Sale) ---
+  // --- RENDER GIÁ ---
   const renderPriceSection = () => {
-    // Xác định giá gốc và giá khuyến mãi
     const originalPrice = selectedVariant ? selectedVariant.price : bike.price
-    
     let finalPrice = originalPrice
     let isSale = false
     let tagLabel = ""
 
-    // Ưu tiên 1: Flash Sale
     if (bike.is_flash_sale && timeLeft !== "EXPIRED") {
         finalPrice = bike.flash_sale_price || originalPrice
         isSale = true
         tagLabel = "🔥 FLASH SALE"
-    } 
-    // Ưu tiên 2: Discount thường
-    else if (bike.discount_price && bike.discount_price < originalPrice && timeLeft !== "EXPIRED") {
+    } else if (bike.discount_price && bike.discount_price < originalPrice && timeLeft !== "EXPIRED") {
         finalPrice = bike.discount_price
         isSale = true
         tagLabel = "⚡ KHUYẾN MÃI"
@@ -164,17 +157,14 @@ function BikeDetailPage() {
     )
   }
 
-  // --- RENDER THÔNG SỐ KỸ THUẬT (MỚI) ---
+  // --- RENDER SPECS ---
   const renderSpecs = () => {
-     // Nếu không có specs (xe cũ), hiển thị thông báo
      if (!bike.specs) {
          return <p className="text-gray-500 italic text-center py-8">Chưa có thông số kỹ thuật chi tiết.</p>
      }
-
      const s = bike.specs
      return (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-            {/* ĐỘNG CƠ */}
             <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
                 <h4 className="text-blue-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
                     <Zap size={18}/> Hiệu Năng
@@ -187,8 +177,6 @@ function BikeDetailPage() {
                     <SpecItem label="Tốc độ tối đa" value={s.top_speed_kmh ? `${s.top_speed_kmh} km/h` : null} />
                 </ul>
             </div>
-
-            {/* KÍCH THƯỚC */}
             <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
                 <h4 className="text-orange-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
                     <Ruler size={18}/> Kích Thước
@@ -199,8 +187,6 @@ function BikeDetailPage() {
                     <SpecItem label="Dung tích bình xăng" value={s.fuel_capacity_l ? `${s.fuel_capacity_l} L` : null} />
                 </ul>
             </div>
-
-            {/* KHÁC (Có thể thêm nếu database có) */}
             <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
                  <h4 className="text-green-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
                     <Info size={18}/> Thông Tin Khác
@@ -229,54 +215,62 @@ function BikeDetailPage() {
   const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.quantity;
   const isOutOfStock = (currentQuantity || 0) <= 0;
 
-  // Lấy danh sách tất cả ảnh để hiển thị Gallery (Ảnh Gallery + Ảnh Biến thể)
-  // Lọc trùng lặp URL
-  const allImages = [
-      ...(bike.images || []).map(img => img.image_url), // Ảnh từ Gallery
-      ...(bike.variants || []).map(v => v.image_url)    // Ảnh từ biến thể
-  ].filter((url, index, self) => url && self.indexOf(url) === index) // Unique
+  // --- LOGIC LỌC ẢNH THÔNG MINH ---
+  // Mục tiêu: Khi chọn màu A, ẩn ảnh của màu B, C để tránh loạn.
+  
+  // 1. Lấy danh sách URL ảnh của CÁC MÀU KHÁC (để loại trừ)
+  // Logic: Duyệt qua các variants, nếu không phải variant đang chọn thì lấy ảnh của nó vào danh sách "blacklist"
+  const otherVariantImages = (bike.variants || [])
+      .filter(v => v.id !== selectedVariant?.id && v.image_url) 
+      .map(v => v.image_url)
 
-  // Nếu không có ảnh nào thì dùng ảnh đại diện
+  // 2. Lấy Gallery gốc và loại bỏ các ảnh nằm trong "blacklist"
+  const filteredGallery = (bike.images || [])
+      .map(img => img.image_url)
+      .filter(url => !otherVariantImages.includes(url))
+
+  // 3. Gom lại: Ảnh của màu đang chọn (ưu tiên lên đầu) + Gallery đã lọc (ảnh chung)
+  let displayImages = []
+  
+  // Thêm ảnh của biến thể đang chọn (nếu có)
+  if (selectedVariant?.image_url) {
+      displayImages.push(selectedVariant.image_url)
+  }
+  
+  // Thêm gallery (đã lọc)
+  displayImages = [...displayImages, ...filteredGallery]
+
+  // 4. Lọc trùng lặp (Unique)
+  const allImages = displayImages.filter((url, index, self) => url && self.indexOf(url) === index)
+
+  // Fallback: Nếu lọc xong không còn ảnh nào thì dùng ảnh đại diện chính của xe
   if (allImages.length === 0 && bike.image_url) allImages.push(bike.image_url)
 
   return (
     <div className="bg-slate-900 min-h-screen text-white pb-20 pt-20">
-      
-      {/* HEADER NAV */}
       <div className="max-w-7xl mx-auto px-4 mb-6">
         <Link to="/bikes" className="inline-flex items-center text-slate-400 hover:text-white transition group">
-          <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition" /> 
-          Danh sách sản phẩm
+          <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition" /> Danh sách sản phẩm
         </Link>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12">
-        
-        {/* --- CỘT TRÁI: GALLERY ẢNH --- */}
+        {/* CỘT TRÁI: GALLERY ẢNH */}
         <div className="space-y-4">
           {/* ẢNH LỚN */}
           <div className="bg-slate-800 rounded-2xl overflow-hidden border border-slate-700 relative aspect-[4/3] group">
-            <img 
-              src={activeImage || "https://via.placeholder.com/600x400?text=No+Image"} 
-              alt={bike.name} 
-              className="w-full h-full object-contain bg-black/20"
-            />
+            <img src={activeImage || "https://via.placeholder.com/600x400?text=No+Image"} alt={bike.name} className="w-full h-full object-contain bg-black/20" />
              {isOutOfStock && (
                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
                     <span className="bg-red-600 text-white px-6 py-2 text-xl font-bold uppercase -rotate-12 border-4 border-white">Hết Hàng</span>
                  </div>
              )}
           </div>
-
-          {/* LIST THUMBNAILS (GALLERY) */}
+          {/* LIST THUMBNAILS (Đã được lọc gọn gàng) */}
           {allImages.length > 0 && (
             <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-700">
                {allImages.map((img, idx) => (
-                  <button 
-                    key={idx} 
-                    onClick={() => setActiveImage(img)}
-                    className={`w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${activeImage === img ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-slate-700 opacity-60 hover:opacity-100'}`}
-                  >
+                  <button key={idx} onClick={() => setActiveImage(img)} className={`w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${activeImage === img ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-slate-700 opacity-60 hover:opacity-100'}`}>
                      <img src={img} className="w-full h-full object-cover" />
                   </button>
                ))}
@@ -284,7 +278,7 @@ function BikeDetailPage() {
           )}
         </div>
 
-        {/* --- CỘT PHẢI: THÔNG TIN --- */}
+        {/* CỘT PHẢI: THÔNG TIN */}
         <div>
            <div className="mb-2">
               <span className="text-blue-400 text-sm font-bold uppercase tracking-wider">{bike.make?.name || bike.brand}</span>
@@ -296,7 +290,6 @@ function BikeDetailPage() {
               </div>
            </div>
 
-           {/* ACTIONS ADMIN */}
            {isAdmin && (
                 <div className="flex gap-3 mb-6">
                     <Link to={`/bikes/${id}/edit`} className="flex items-center gap-2 bg-yellow-500/10 text-yellow-500 px-4 py-2 rounded-lg hover:bg-yellow-500/20 transition text-sm font-bold">
@@ -309,20 +302,14 @@ function BikeDetailPage() {
            )}
 
            <div className="w-full h-px bg-slate-800 my-6"></div>
-
            {renderPriceSection()}
 
-           {/* CHỌN MÀU (VARIANTS) */}
            {bike.variants && bike.variants.length > 0 && (
               <div className="mb-8">
-                 <h3 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3">Phiên bản màu sắc:</h3>
+                 <h3 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3">Lựa chọn phiên bản:</h3>
                  <div className="flex flex-wrap gap-3">
                     {bike.variants.map((v) => (
-                       <button 
-                          key={v.id} 
-                          onClick={() => setSelectedVariant(v)}
-                          className={`flex items-center gap-2 px-4 py-3 rounded-xl border transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-                       >
+                       <button key={v.id} onClick={() => setSelectedVariant(v)} className={`flex items-center gap-2 px-4 py-3 rounded-xl border transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
                           {v.image_url && <img src={v.image_url} className="w-6 h-6 rounded object-cover" />}
                           <span className="font-bold text-sm uppercase">{v.name}</span>
                        </button>
@@ -331,16 +318,10 @@ function BikeDetailPage() {
               </div>
            )}
 
-           {/* BUTTON MUA HÀNG */}
            <div className="flex gap-4">
-              <button 
-                 onClick={handleAddToCart}
-                 disabled={isOutOfStock}
-                 className={`flex-1 py-4 rounded-xl font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition-transform active:scale-95 ${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500 text-white'}`}
-              >
+              <button onClick={handleAddToCart} disabled={isOutOfStock} className={`flex-1 py-4 rounded-xl font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition-transform active:scale-95 ${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500 text-white'}`}>
                  {isOutOfStock ? "Hết Hàng" : <><ShoppingCart size={20}/> Thêm Vào Giỏ</>}
               </button>
-              
               <button onClick={() => { addToCompare(bike); navigate('/compare'); }} className="px-6 rounded-xl bg-slate-800 border border-slate-600 text-blue-400 hover:text-white hover:border-blue-500 transition-colors">
                  <Scale size={24} />
               </button>
@@ -353,7 +334,6 @@ function BikeDetailPage() {
         </div>
       </div>
 
-      {/* --- PHẦN DƯỚI: THÔNG SỐ KỸ THUẬT --- */}
       <div className="max-w-7xl mx-auto px-4 mt-16 border-t border-slate-800 pt-10">
           <div className="flex items-center gap-3 mb-6">
              <div className="p-3 bg-slate-800 rounded-xl text-blue-500"><Settings size={24}/></div>
@@ -361,7 +341,6 @@ function BikeDetailPage() {
           </div>
           {renderSpecs()}
       </div>
-
     </div>
   )
 }
