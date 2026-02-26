@@ -1,0 +1,22 @@
+# Bỏ qua thư viện Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Bỏ qua thư viện Node.js (Frontend)
+node_modules/
+dist/
+build/
+.DS_Store
+
+# Bỏ qua file Database (Dữ liệu local không nên đẩy lên)
+*.db
+*.sqlite3
+sql_app.db
+
+# Bỏ qua file môi trường chứa mật khẩu
+.env
+.env.local
