@@ -1,4 +1,4 @@
-import google.generativeai as genai
+from groq import Groq
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,90 +11,130 @@ from src.bikes.models import Bike
 
 router = APIRouter()
 
-# Cấu hình Gemini
-if settings.GEMINI_API_KEY:
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+# --- CẤU HÌNH GROQ ---
+groq_client = None
+if settings.GROQ_API_KEY:
+    groq_client = Groq(api_key=settings.GROQ_API_KEY)
+    print("✅ Groq đã sẵn sàng")
 else:
-    print("⚠️ CẢNH BÁO: Chưa tìm thấy GEMINI_API_KEY")
+    print("⚠️ Chưa tìm thấy GROQ_API_KEY")
 
-generation_config = {
-    "temperature": 0.7,
-    "top_p": 0.95,
-    "top_k": 40,
-    "max_output_tokens": 1024,
-}
 
 class ChatRequest(BaseModel):
     message: str
 
-# ===== BỘ NÃO DỰ PHÒNG (RULE-BASED) - CHẠY LOCAL 100% =====
+
+# ===== FALLBACK: RULE-BASED =====
 def rule_based_reply(message: str, bikes: list) -> str:
     msg = message.lower()
 
-    # 1. Chào hỏi
-    if any(k in msg for k in ["hi", "chào", "hello"]):
+    # CHẶN CHỦ ĐỀ NGOÀI LỀ
+    off_topic_keywords = [
+        "chính trị", "bầu cử", "tổng thống", "chiến tranh", "quân sự",
+        "phim", "nhạc", "ca sĩ", "diễn viên", "bóng đá", "thể thao",
+        "nấu ăn", "công thức", "du lịch", "khách sạn", "nhà hàng",
+        "cổ phiếu", "bitcoin", "crypto", "chứng khoán",
+        "điện thoại", "laptop", "máy tính", "iphone", "samsung",
+        "thời tiết", "tin tức", "báo", "game", "anime",
+    ]
+    if any(k in msg for k in off_topic_keywords):
+        return "Xin lỗi, tôi chỉ có thể tư vấn về xe PKL tại **Moto World** thôi bạn nhé! 🏍️\n\nBạn cần tư vấn xe gì không?"
+
+    # Chào hỏi
+    if any(k in msg for k in ["hi", "chào", "hello", "hey", "alo"]):
         return "👋 Chào bạn! Tôi là trợ lý ảo của **Moto World**. Bạn cần tư vấn về dòng xe PKL nào không?"
 
-    # 2. Xử lý ngân sách (Ví dụ: "xe dưới 600tr", "tầm 500 triệu")
+    # Ngân sách
     match = re.search(r'(\d+)\s*(tr|triệu|tỷ)', msg)
     if match:
         amount = int(match.group(1))
         budget = amount * 1_000_000 if "tỷ" not in match.group(2) else amount * 1_000_000_000
-        
-        # Lọc xe theo giá
         filtered = [b for b in bikes if b.price <= budget]
         if filtered:
-            res = f"💡 Với ngân sách khoảng **{amount} {match.group(2)}**, đây là các mẫu xe dành cho bạn:\n\n"
+            res = f"💡 Với ngân sách **{amount} {match.group(2)}**, đây là các mẫu xe phù hợp:\n\n"
             for b in filtered[:5]:
                 res += f"- **{b.name}**: {b.price:,.0f} VNĐ\n"
             return res
-        return f"Hiện tại showroom chưa có xe nào trong tầm giá {amount} {match.group(2)}. Bạn có muốn nâng ngân sách lên một chút không?"
+        return f"Hiện chưa có xe nào trong tầm giá {amount} {match.group(2)}. Bạn có muốn nâng ngân sách không?"
 
-    # 3. Tra cứu danh sách xe / Báo giá chung
-    if any(k in msg for k in ["giá", "bao nhiêu", "danh sách", "có xe gì"]):
-        if not bikes: return "Kho xe đang cập nhật, bạn vui lòng quay lại sau nhé!"
+    # Danh sách / giá xe
+    if any(k in msg for k in ["giá", "bao nhiêu", "danh sách", "có xe gì", "xem xe"]):
+        if not bikes:
+            return "Kho xe đang cập nhật, bạn vui lòng quay lại sau nhé!"
         reply = "🏍️ **Showroom đang có sẵn các mẫu sau:**\n\n"
         for b in bikes[:8]:
             reply += f"- **{b.name}**: {b.price:,.0f} VNĐ\n"
         return reply
 
-    # 4. Địa chỉ & Liên hệ
-    if any(k in msg for k in ["địa chỉ", "ở đâu", "liên hệ", "số điện thoại"]):
+    # Liên hệ / địa chỉ
+    if any(k in msg for k in ["địa chỉ", "ở đâu", "liên hệ", "số điện thoại", "hotline"]):
         return "📍 **Showroom Moto World**\n- Địa chỉ: 123 Đường Xe Máy, Quận 1, TP.HCM\n- Hotline: **1800-MOTO** (8:00 - 20:00)"
 
-    return "🤔 Tôi chưa rõ ý bạn. Bạn có thể hỏi về: **Giá xe**, **Tư vấn theo ngân sách (ví dụ: xe dưới 500tr)** hoặc **Địa chỉ showroom** nhé!"
+    # Cảm ơn
+    if any(k in msg for k in ["cảm ơn", "thanks", "thank", "ok", "được rồi"]):
+        return "😊 Không có gì! Nếu cần tư vấn thêm, bạn cứ hỏi nhé! 🏍️"
+
+    # Mặc định
+    return "🤔 Bạn có thể hỏi về: **Giá xe**, **Tư vấn ngân sách** hoặc **Địa chỉ showroom** nhé!"
+
 
 # ===== MAIN HANDLER =====
 @router.post("")
 async def chat_with_ai(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     user_msg = request.message
-    
-    # Luôn lấy dữ liệu xe từ DB để sẵn sàng cho cả AI và Fallback
+
+    # Lấy dữ liệu xe từ DB
     query = select(Bike).where(Bike.is_active == True)
     result = await db.execute(query)
     bikes = result.scalars().all()
 
-    # Chuẩn bị Context cho AI
     bike_context = "\n".join([f"- {b.name} ({b.type}): {b.price:,.0f} VNĐ" for b in bikes])
-    system_instruction = f"Bạn là Moto AI. Tư vấn xe dựa trên danh sách: {bike_context}. Trả lời ngắn, dùng emoji."
 
+    system_instruction = f"""Bạn là Moto AI, trợ lý ảo chuyên nghiệp của showroom Moto World.
+
+PHẠM VI TRẢ LỜI - CHỈ hỗ trợ các chủ đề sau:
+- Tư vấn, so sánh xe PKL (mô tô phân khối lớn) có trong kho
+- Giá xe, chính sách trả góp, khuyến mãi
+- Thông số kỹ thuật, bảo dưỡng xe PKL
+- Thông tin showroom Moto World (địa chỉ, hotline, giờ mở cửa)
+
+TUYỆT ĐỐI TỪ CHỐI các chủ đề sau (trả lời lịch sự và quay về chủ đề xe):
+- Chính trị, thời sự, chiến tranh, bầu cử
+- Giải trí: phim, nhạc, bóng đá, thể thao
+- Ẩm thực, du lịch, khách sạn
+- Tài chính: cổ phiếu, crypto, bitcoin
+- Công nghệ: điện thoại, laptop, máy tính
+- Bất kỳ chủ đề nào KHÔNG liên quan đến xe PKL và Moto World
+
+Khi từ chối, luôn dùng mẫu câu: "Xin lỗi, tôi chỉ có thể tư vấn về xe PKL tại Moto World thôi bạn nhé! 🏍️ Bạn cần tư vấn xe gì không?"
+
+DỮ LIỆU KHO XE THỰC TẾ:
+{bike_context}
+
+Trả lời bằng Tiếng Việt, ngắn gọn, thân thiện, dùng emoji hợp lý, định dạng Markdown."""
+
+    # 1. Thử Groq
     try:
-        # ƯU TIÊN DÙNG AI (Dùng bản 1.5 Flash cho ổn định Quota)
-        chat_model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash", 
-            generation_config=generation_config,
-            system_instruction=system_instruction
+        if not groq_client:
+            raise Exception("Groq chưa được cấu hình")
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_msg}
+            ],
+            max_tokens=1024,
+            temperature=0.7,
         )
-        response = chat_model.generate_content(user_msg)
-        return {"reply": response.text, "source": "ai"}
+        print("✅ Groq OK")
+        return {"reply": response.choices[0].message.content, "source": "groq"}
 
     except Exception as e:
-        error_str = str(e)
-        # Nếu gặp lỗi 404 (Không tìm thấy model) hoặc 429 (Hết lượt dùng)
-        if any(code in error_str for code in ["404", "429", "quota", "limit"]):
-            print(f"⚠️ Chế độ Demo: AI đang bận/lỗi, chuyển sang bộ não dự phòng.")
-            reply = rule_based_reply(user_msg, bikes)
-            return {"reply": reply, "source": "fallback"}
-        
-        # Các lỗi khác
-        return {"reply": "Chào bạn, Moto AI đây! Bạn cần hỏi về mẫu xe nào trong cửa hàng không?"}
+        print(f"⚠️ Groq lỗi: {str(e)[:80]} → dùng rule-based")
+
+    # 2. Fallback rule-based
+    reply = rule_based_reply(user_msg, bikes)
+    print("✅ Rule-based OK")
+    return {"reply": reply, "source": "fallback"}
+

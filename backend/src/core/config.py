@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     MAIL_PASSWORD: str = ""
 
     # 👇 3. THÊM DÒNG NÀY (Cấu hình AI):
-    GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
 
     class Config:
         env_file = ".env"

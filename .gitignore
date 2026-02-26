@@ -17,6 +17,9 @@ build/
 *.sqlite3
 sql_app.db
 
-# Bỏ qua file môi trường chứa mật khẩu
+# Bỏ qua file môi trường chứa mật khẩu và thông tin nhạy cảm
 .env
 .env.local
+*.env
+backend/.env
+frontend/.env
