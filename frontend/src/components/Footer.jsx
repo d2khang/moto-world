@@ -68,7 +68,7 @@ const Footer = () => {
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-white min-w-[60px]">Email:</span> 
-                <span>motoworld69@gmail.com</span>
+                <span>motoworld6699@gmail.com</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-white min-w-[60px]">Địa chỉ:</span> 
