@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-// --- CÁC COMPONENT GIAO DIỆN (ĐƯA RA NGOÀI ĐỂ TRÁNH LỖI MẤT FOCUS) ---
+// --- CÁC COMPONENT GIAO DIỆN ---
 const SectionHeader = ({ icon: Icon, title, color }) => (
   <div className="flex items-center gap-3 mb-6 pb-3 border-b border-slate-700/50">
     <div className={`p-2 rounded-lg bg-slate-800 ${color}`}><Icon size={22} /></div>
@@ -48,7 +48,7 @@ function EditBikePage() {
   })
 
   const [mainFile, setMainFile] = useState(null)
-  const [mainPreview, setMainPreview] = useState(null) // URL xem trước (blob hoặc link cũ)
+  const [mainPreview, setMainPreview] = useState(null)
 
   const [variants, setVariants] = useState([])
   const [specs, setSpecs] = useState({
@@ -82,13 +82,14 @@ function EditBikePage() {
         
         if (b.specs) setSpecs(b.specs)
         
-        // Map variants cũ (thêm fields cho việc chọn ảnh mới)
+        // Map variants cũ
         if (b.variants) {
           setVariants(b.variants.map(v => ({
              ...v,
-             files: [],
-             previews: [],
-             existing_image: v.image_url
+             files: [], // File mới upload
+             previews: [], // Preview file mới
+             existing_images: v.images || [], // Ảnh cũ từ DB
+             image_url: v.image_url // Ảnh đại diện cũ
           })))
         }
       } catch (error) {
@@ -128,12 +129,22 @@ function EditBikePage() {
     setVariants(newVariants)
   }
 
-  const removeVariantFile = (vIdx, fIdx) => {
+  const removeVariantNewFile = (vIdx, fIdx) => {
     const newVariants = [...variants]
     URL.revokeObjectURL(newVariants[vIdx].previews[fIdx])
     newVariants[vIdx].files.splice(fIdx, 1)
     newVariants[vIdx].previews.splice(fIdx, 1)
     setVariants(newVariants)
+  }
+
+  // Hàm xoá logic này chỉ mang tính giao diện (vì backend mình đang dùng chiến lược xóa hết tạo lại variants)
+  // Nhưng để hiển thị đúng thì vẫn cần
+  const removeVariantOldImage = (vIdx, imgIdx) => {
+     // Lưu ý: Logic backend hiện tại là "Xoá hết variant cũ tạo lại"
+     // Nên việc xoá ảnh cũ ở đây chỉ là ẩn khỏi giao diện
+     const newVariants = [...variants]
+     newVariants[vIdx].existing_images.splice(imgIdx, 1)
+     setVariants(newVariants)
   }
 
   const handleVariantChange = (index, field, value) => {
@@ -143,7 +154,7 @@ function EditBikePage() {
   }
 
   const addVariant = () => {
-    setVariants([...variants, { name: '', price: formData.price, quantity: 1, files: [], previews: [] }])
+    setVariants([...variants, { name: '', price: formData.price, quantity: 1, files: [], previews: [], existing_images: [] }])
   }
 
   const removeVariant = (index) => {
@@ -151,7 +162,7 @@ function EditBikePage() {
     setVariants(variants.filter((_, i) => i !== index))
   }
 
-  // --- 4. SUBMIT UPDATE ---
+  // --- 4. SUBMIT UPDATE (LOGIC MỚI) ---
   const handleSubmit = async (e) => {
     e.preventDefault()
     const token = localStorage.getItem('token')
@@ -161,7 +172,7 @@ function EditBikePage() {
     const toastId = toast.loading("Đang cập nhật dữ liệu...")
 
     try {
-      // BƯỚC 1: CẬP NHẬT THÔNG TIN CƠ BẢN & SPECS
+      // BƯỚC 1: CẬP NHẬT THÔNG TIN CƠ BẢN XE
       const payload = {
         ...formData,
         price: Number(formData.price),
@@ -185,61 +196,75 @@ function EditBikePage() {
         headers: { Authorization: `Bearer ${token}` }
       })
 
-      // BƯỚC 2: XỬ LÝ UPLOAD ẢNH MỚI (NẾU CÓ)
-      let allNewFiles = []
-      if (mainFile) allNewFiles.push(mainFile)
-      
-      const variantPhotoCounts = [] 
-      variants.forEach(v => {
-          allNewFiles.push(...v.files)
-          variantPhotoCounts.push(v.files.length)
-      })
-
-      let uploadedUrls = []
-      if (allNewFiles.length > 0) {
-          const formDataUpload = new FormData()
-          allNewFiles.forEach(f => formDataUpload.append('files', f))
-          const uploadRes = await axios.post(`http://localhost:8000/api/bikes/${id}/gallery`, formDataUpload, {
+      // BƯỚC 2: CẬP NHẬT ẢNH ĐẠI DIỆN CHÍNH (NẾU CÓ)
+      if (mainFile) {
+          const formDataMain = new FormData()
+          formDataMain.append('files', mainFile)
+          const uploadRes = await axios.post(`http://localhost:8000/api/bikes/${id}/gallery`, formDataMain, {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
           })
-          uploadedUrls = uploadRes.data.urls
-      }
-
-      // BƯỚC 3: CẬP NHẬT ẢNH ĐẠI DIỆN XE (NẾU THAY ĐỔI)
-      if (mainFile && uploadedUrls.length > 0) {
-          await axios.put(`http://localhost:8000/api/bikes/${id}`, { image_url: uploadedUrls[0] }, {
-              headers: { Authorization: `Bearer ${token}` }
-          })
-      }
-
-      // BƯỚC 4: CẬP NHẬT BIẾN THỂ
-      // (Lưu ý: Để đơn giản, ta sẽ xóa các biến thể cũ và tạo lại toàn bộ để đồng bộ ảnh mới)
-      // Hoặc gọi API Bulk update nếu backend hỗ trợ. Ở đây ta dùng API create_bulk_variants đã viết.
-      let urlPointer = mainFile ? 1 : 0
-      const finalVariants = variants.map((v, idx) => {
-          const count = variantPhotoCounts[idx]
-          const myNewUrls = uploadedUrls.slice(urlPointer, urlPointer + count)
-          urlPointer += count
-
-          return {
-              name: v.name,
-              price: Number(v.price) || Number(formData.price),
-              quantity: Number(v.quantity),
-              // Nếu có ảnh mới thì lấy ảnh mới, không thì giữ ảnh cũ
-              image_url: myNewUrls.length > 0 ? myNewUrls[0] : v.existing_image
+          // Set ảnh vừa up làm ảnh đại diện
+          if(uploadRes.data.urls && uploadRes.data.urls.length > 0) {
+             // Backend tự lưu vào gallery, giờ cần set primary
+             // Tuy nhiên logic backend hiện tại `POST /gallery` chưa trả về ID ảnh để set primary.
+             // Nên ta dùng trick: Update lại field image_url của bike
+             await axios.put(`http://localhost:8000/api/bikes/${id}`, { image_url: uploadRes.data.urls[0] }, {
+                 headers: { Authorization: `Bearer ${token}` }
+             })
           }
-      })
+      }
 
-      await axios.post(`http://localhost:8000/api/bikes/${id}/variants/bulk`, finalVariants, {
+      // BƯỚC 3: CẬP NHẬT VARIANTS (CHIẾN LƯỢC: XOÁ CŨ TẠO MỚI BULK)
+      // Lưu ý: Cách này sẽ làm mất ảnh cũ của variant nếu không xử lý kỹ.
+      // Nhưng để đơn giản và tránh conflict ID, ta sẽ tạo lại variants.
+      // Tuy nhiên, ta cần giữ lại URL ảnh cũ nếu người dùng không thay đổi.
+      
+      const variantsPayload = variants.map(v => ({
+          name: v.name,
+          price: Number(v.price) || Number(formData.price),
+          quantity: Number(v.quantity),
+          // Nếu variant cũ có image_url thì giữ lại, nếu không thì null
+          image_url: v.image_url 
+      }))
+
+      // Gọi API xoá cũ tạo mới variants
+      // API này trả về message thành công, nhưng KHÔNG trả về ID của các variants mới tạo
+      // Điều này gây khó khăn cho việc upload ảnh ngay lập tức.
+      // => GIẢI PHÁP: 
+      // 1. Tạo variants xong.
+      // 2. Gọi API lấy lại chi tiết xe để lấy ID các variants mới tạo.
+      // 3. Loop qua từng variant ID để upload ảnh.
+
+      await axios.post(`http://localhost:8000/api/bikes/${id}/variants/bulk`, variantsPayload, {
           headers: { Authorization: `Bearer ${token}` }
       })
+
+      // Fetch lại xe để lấy ID mới của variants
+      const updatedBikeRes = await axios.get(`http://localhost:8000/api/bikes/${id}`)
+      const newVariantsFromDB = updatedBikeRes.data.variants
+
+      // BƯỚC 4: UPLOAD ẢNH CHO TỪNG VARIANT MỚI
+      // Logic mapping: Giả sử thứ tự variants không đổi
+      for (let i = 0; i < newVariantsFromDB.length; i++) {
+          const variantId = newVariantsFromDB[i].id
+          const filesToUpload = variants[i].files // File mới người dùng chọn
+
+          if (filesToUpload && filesToUpload.length > 0) {
+              const fd = new FormData()
+              filesToUpload.forEach(f => fd.append('files', f))
+              
+              await axios.post(`http://localhost:8000/api/bikes/${id}/variants/${variantId}/gallery`, fd, {
+                  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
+              })
+          }
+      }
 
       toast.success("Cập nhật thành công!", { id: toastId })
       navigate('/admin/bikes')
 
     } catch (error) {
       console.error(error)
-      toast.error("Lỗi cập nhật dữ liệu", { id: toastId })
+      toast.error("Lỗi cập nhật dữ liệu: " + (error.response?.data?.detail || error.message), { id: toastId })
     } finally {
       setSaving(false)
     }
@@ -360,25 +385,29 @@ function EditBikePage() {
                                 <ImageIcon size={10}/> Thêm ảnh màu {v.name || '...'}
                              </label>
                              <div className="grid grid-cols-3 gap-2">
-                                {/* Hiện ảnh cũ nếu có và ko có ảnh mới */}
-                                {v.existing_image && v.previews.length === 0 && (
-                                    <div className="relative aspect-square rounded overflow-hidden border border-slate-800">
-                                        <img src={v.existing_image} className="w-full h-full object-cover opacity-50" alt="Old" />
-                                        <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] bg-slate-900 px-1">ẢNH CŨ</span></div>
-                                    </div>
-                                )}
-                                
-                                {v.previews.map((url, fIdx) => (
-                                    <div key={fIdx} className="relative aspect-square rounded overflow-hidden border border-slate-800 group/img">
-                                        <img src={url} className="w-full h-full object-cover" alt="New" />
-                                        <button type="button" onClick={() => removeVariantFile(i, fIdx)} className="absolute top-0 right-0 bg-red-500/80 p-0.5 opacity-0 group-hover/img:opacity-100 transition-opacity"><X size={10}/></button>
+                                {/* Hiển thị ảnh cũ (existing) */}
+                                {v.existing_images && v.existing_images.map((img, imgIdx) => (
+                                    <div key={`old-${img.id}`} className="relative aspect-square rounded overflow-hidden border border-slate-800">
+                                         <img src={img.image_url} className="w-full h-full object-cover opacity-60" alt="Old" />
+                                         <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] bg-slate-900/80 text-white px-1 rounded">CŨ</span></div>
                                     </div>
                                 ))}
+
+                                {/* Hiển thị ảnh mới chọn (preview) */}
+                                {v.previews.map((url, fIdx) => (
+                                    <div key={fIdx} className="relative aspect-square rounded overflow-hidden border border-green-500 group/img">
+                                        <img src={url} className="w-full h-full object-cover" alt="New" />
+                                        <button type="button" onClick={() => removeVariantNewFile(i, fIdx)} className="absolute top-0 right-0 bg-red-500/80 p-0.5 opacity-0 group-hover/img:opacity-100 transition-opacity"><X size={10}/></button>
+                                        <div className="absolute bottom-0 inset-x-0 bg-green-500/80 text-[8px] text-white text-center font-bold">MỚI</div>
+                                    </div>
+                                ))}
+                                
                                 <label className="aspect-square border border-dashed border-slate-700 rounded flex flex-col items-center justify-center hover:border-blue-500 transition-colors cursor-pointer bg-slate-900/30">
                                     <Plus size={16} className="text-slate-600" />
                                     <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleVariantFilesChange(i, e.target.files)} />
                                 </label>
                              </div>
+                             <p className="text-[10px] text-slate-600 mt-2 italic">* Lưu ý: Chỉnh sửa sẽ xóa và tạo lại biến thể. Hãy upload lại ảnh nếu cần thay đổi.</p>
                           </div>
                        </div>
                     </div>

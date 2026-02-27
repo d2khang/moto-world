@@ -9,6 +9,12 @@ import { useCart } from '../context/CartContext'
 import { useCompare } from '../context/CompareContext' 
 import toast from 'react-hot-toast'
 
+/**
+ * File: BikeDetailPage.jsx
+ * Chức năng: Hiển thị chi tiết xe.
+ * ĐẶC BIỆT: Logic lọc ảnh chỉ hiển thị ảnh của biến thể (màu) đang chọn.
+ */
+
 function BikeDetailPage() {
   const { id } = useParams() 
   const navigate = useNavigate()
@@ -37,11 +43,11 @@ function BikeDetailPage() {
             setSelectedVariant(res.data.variants[0])
         }
 
-        // Mặc định chọn ảnh đầu tiên từ Gallery hoặc ảnh đại diện
-        const firstImg = (res.data.images && res.data.images.length > 0) 
-            ? res.data.images[0].image_url 
+        // Mặc định hiển thị ảnh của biến thể đầu tiên (nếu có)
+        const initialImg = (res.data.variants && res.data.variants[0]?.image_url) 
+            ? res.data.variants[0].image_url 
             : res.data.image_url
-        setActiveImage(firstImg)
+        setActiveImage(initialImg)
 
       } catch (error) {
         console.error("Lỗi:", error)
@@ -78,7 +84,7 @@ function BikeDetailPage() {
     return () => clearInterval(timer);
   }, [bike]);
 
-  // 3. ĐỔI ẢNH KHI CHỌN MÀU
+  // 3. TỰ ĐỘNG ĐỔI ẢNH LỚN KHI CHỌN MÀU (BIẾN THỂ) KHÁC
   useEffect(() => {
       if (selectedVariant && selectedVariant.image_url) {
           setActiveImage(selectedVariant.image_url)
@@ -215,36 +221,36 @@ function BikeDetailPage() {
   const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.quantity;
   const isOutOfStock = (currentQuantity || 0) <= 0;
 
-  // --- LOGIC LỌC ẢNH THÔNG MINH ---
-  // Mục tiêu: Khi chọn màu A, ẩn ảnh của màu B, C để tránh loạn.
+  // ============================================================
+  // LOGIC LỌC ẢNH THÔNG MINH (UPDATED)
+  // Chỉ hiển thị ảnh của biến thể đang chọn.
+  // ============================================================
   
-  // 1. Lấy danh sách URL ảnh của CÁC MÀU KHÁC (để loại trừ)
-  // Logic: Duyệt qua các variants, nếu không phải variant đang chọn thì lấy ảnh của nó vào danh sách "blacklist"
-  const otherVariantImages = (bike.variants || [])
-      .filter(v => v.id !== selectedVariant?.id && v.image_url) 
-      .map(v => v.image_url)
-
-  // 2. Lấy Gallery gốc và loại bỏ các ảnh nằm trong "blacklist"
-  const filteredGallery = (bike.images || [])
-      .map(img => img.image_url)
-      .filter(url => !otherVariantImages.includes(url))
-
-  // 3. Gom lại: Ảnh của màu đang chọn (ưu tiên lên đầu) + Gallery đã lọc (ảnh chung)
   let displayImages = []
   
-  // Thêm ảnh của biến thể đang chọn (nếu có)
-  if (selectedVariant?.image_url) {
-      displayImages.push(selectedVariant.image_url)
+  if (selectedVariant) {
+      // 1. Lấy ảnh đại diện của biến thể
+      if (selectedVariant.image_url) {
+          displayImages.push(selectedVariant.image_url)
+      }
+      
+      // 2. Lấy album ảnh riêng của biến thể (Từ Backend mới đã gửi kèm)
+      if (selectedVariant.images && selectedVariant.images.length > 0) {
+          const variantGallery = selectedVariant.images.map(img => img.image_url)
+          displayImages = [...displayImages, ...variantGallery]
+      }
   }
-  
-  // Thêm gallery (đã lọc)
-  displayImages = [...displayImages, ...filteredGallery]
+
+  // 3. Fallback: Chỉ khi nào không có bất kỳ ảnh nào của biến thể, mới dùng ảnh chung của xe
+  // (Để tránh việc chọn màu Đỏ mà lại hiện ảnh màu Xanh từ gallery chung)
+  if (displayImages.length === 0) {
+      if (bike.image_url) displayImages.push(bike.image_url)
+      // Nếu muốn hiển thị gallery chung khi không có ảnh biến thể, bỏ comment dòng dưới:
+      // if (bike.images) displayImages = [...displayImages, ...bike.images.map(i => i.image_url)]
+  }
 
   // 4. Lọc trùng lặp (Unique)
   const allImages = displayImages.filter((url, index, self) => url && self.indexOf(url) === index)
-
-  // Fallback: Nếu lọc xong không còn ảnh nào thì dùng ảnh đại diện chính của xe
-  if (allImages.length === 0 && bike.image_url) allImages.push(bike.image_url)
 
   return (
     <div className="bg-slate-900 min-h-screen text-white pb-20 pt-20">
@@ -257,7 +263,7 @@ function BikeDetailPage() {
       <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12">
         {/* CỘT TRÁI: GALLERY ẢNH */}
         <div className="space-y-4">
-          {/* ẢNH LỚN */}
+          {/* ẢNH LỚN ACTIVE */}
           <div className="bg-slate-800 rounded-2xl overflow-hidden border border-slate-700 relative aspect-[4/3] group">
             <img src={activeImage || "https://via.placeholder.com/600x400?text=No+Image"} alt={bike.name} className="w-full h-full object-contain bg-black/20" />
              {isOutOfStock && (
@@ -266,8 +272,9 @@ function BikeDetailPage() {
                  </div>
              )}
           </div>
-          {/* LIST THUMBNAILS (Đã được lọc gọn gàng) */}
-          {allImages.length > 0 && (
+
+          {/* LIST THUMBNAILS (Chỉ hiện ảnh của màu đang chọn) */}
+          {allImages.length > 1 && (
             <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-700">
                {allImages.map((img, idx) => (
                   <button key={idx} onClick={() => setActiveImage(img)} className={`w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${activeImage === img ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-slate-700 opacity-60 hover:opacity-100'}`}>

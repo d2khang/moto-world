@@ -1,5 +1,3 @@
-# File: backend/src/bikes/router.py
-
 import shutil
 import uuid
 import os
@@ -60,13 +58,20 @@ async def ensure_attributes_exist(db: AsyncSession, brand: str = None, type_: st
     await db.flush()
 
 def get_bike_with_relations(bike_id: int):
-    """Helper load đầy đủ quan hệ kể cả ảnh từng variant"""
+    """
+    Helper load đầy đủ quan hệ:
+    - Hãng xe (Make)
+    - Thông số (Specs)
+    - Gallery chung (Images)
+    - Biến thể (Variants) VÀ Gallery riêng của từng biến thể (BikeVariant -> Images)
+    """
     return (
         select(Bike).where(Bike.id == bike_id).options(
             selectinload(Bike.make),
-            selectinload(Bike.variants).selectinload(BikeVariant.images),  # ✅ Ảnh riêng từng variant
             selectinload(Bike.specs),
-            selectinload(Bike.images)
+            selectinload(Bike.images),
+            # --- QUAN TRỌNG: Load sâu vào trong variant để lấy images ---
+            selectinload(Bike.variants).selectinload(BikeVariant.images) 
         )
     )
 
@@ -88,8 +93,11 @@ async def create_bike(
     await ensure_attributes_exist(db, brand=bike_data.get('brand'), type_=bike_data.get('type'))
 
     if not bike_data.get('make_id') and bike_data.get('brand'):
-        make = (await db.execute(select(Make).where(Make.name == bike_data.get('brand')))).scalar_one()
-        bike_data['make_id'] = make.id
+        try:
+            make = (await db.execute(select(Make).where(Make.name == bike_data.get('brand')))).scalar_one()
+            bike_data['make_id'] = make.id
+        except:
+            pass # Handle case where brand creation might have failed or race condition
 
     bike_data.pop('brand', None)
 
@@ -116,7 +124,7 @@ async def create_bike(
         raise HTTPException(status_code=400, detail="Lỗi dữ liệu: Trùng tên hoặc lỗi ràng buộc.")
 
 # ==========================================
-# 2. API UPLOAD GALLERY XE
+# 2. API UPLOAD GALLERY XE (CHUNG)
 # ==========================================
 @router.post("/{bike_id}/gallery", status_code=201)
 async def upload_bike_gallery(
@@ -216,8 +224,10 @@ async def list_bikes(
 ):
     stmt = select(Bike).options(
         selectinload(Bike.make),
-        selectinload(Bike.variants).selectinload(BikeVariant.images),  # ✅ Load ảnh variant
-        selectinload(Bike.images)
+        selectinload(Bike.specs),
+        selectinload(Bike.images),
+        # --- QUAN TRỌNG: Load ảnh variant cho danh sách ---
+        selectinload(Bike.variants).selectinload(BikeVariant.images)
     ).distinct()
 
     if brand: stmt = stmt.join(Make).where(Make.name.ilike(f"%{brand}%"))
@@ -298,7 +308,7 @@ async def delete_bike(
     return None
 
 # ==========================================
-# 9. API CẬP NHẬT BIẾN THỂ BULK
+# 9. API CẬP NHẬT BIẾN THỂ BULK (LƯU Ý: XOÁ CŨ LẬP MỚI)
 # ==========================================
 @router.post("/{bike_id}/variants/bulk", status_code=201)
 async def create_bulk_variants(
@@ -312,12 +322,19 @@ async def create_bulk_variants(
     if not bike:
         raise HTTPException(404, "Xe không tồn tại")
 
-    # Xóa ảnh variant cũ trước
+    # Lưu ý: Logic này xoá toàn bộ biến thể cũ và tạo lại. 
+    # Nếu biến thể cũ có ảnh riêng, ảnh đó sẽ mất liên kết trong DB (file vẫn còn trên ổ cứng).
+    # Để giữ ảnh, cần logic phức tạp hơn (update thay vì delete).
+    
+    # 1. Xóa ảnh variant cũ khỏi DB
     old_variants = (await db.execute(select(BikeVariant).where(BikeVariant.bike_id == bike_id))).scalars().all()
     for v in old_variants:
         await db.execute(delete(BikeVariantImage).where(BikeVariantImage.variant_id == v.id))
+    
+    # 2. Xóa variant cũ
     await db.execute(delete(BikeVariant).where(BikeVariant.bike_id == bike_id))
 
+    # 3. Tạo variant mới
     for v in variants_in:
         new_variant = BikeVariant(
             bike_id=bike_id,
@@ -334,7 +351,7 @@ async def create_bulk_variants(
     return {"message": f"Đã cập nhật {len(variants_in)} phiên bản thành công"}
 
 # ==========================================
-# 10. API UPLOAD GALLERY BIẾN THỂ ✅ MỚI
+# 10. API UPLOAD GALLERY BIẾN THỂ
 # ==========================================
 @router.post("/{bike_id}/variants/{variant_id}/gallery", status_code=201)
 async def upload_variant_gallery(
@@ -371,6 +388,8 @@ async def upload_variant_gallery(
             shutil.copyfileobj(file.file, buffer)
 
         url = f"http://localhost:8000/{path}"
+        
+        # Logic: Nếu chưa có ảnh primary nào trong DB VÀ đây là ảnh đầu tiên trong batch upload
         is_primary = (len(saved) == 0 and existing_primary is None)
 
         db.add(BikeVariantImage(variant_id=variant_id, image_url=url, is_primary=is_primary))
@@ -384,7 +403,7 @@ async def upload_variant_gallery(
     return {"message": f"Đã upload {len(saved)} ảnh cho biến thể", "urls": saved}
 
 # ==========================================
-# 11. API LẤY GALLERY BIẾN THỂ ✅ MỚI
+# 11. API LẤY GALLERY BIẾN THỂ
 # ==========================================
 @router.get("/{bike_id}/variants/{variant_id}/gallery")
 async def get_variant_gallery(
@@ -408,7 +427,7 @@ async def get_variant_gallery(
     }
 
 # ==========================================
-# 12. API ĐẶT ẢNH PRIMARY BIẾN THỂ ✅ MỚI
+# 12. API ĐẶT ẢNH PRIMARY BIẾN THỂ
 # ==========================================
 @router.put("/variants/gallery/{image_id}/set-primary")
 async def set_variant_primary_image(
@@ -435,7 +454,7 @@ async def set_variant_primary_image(
     return {"message": "Đã cập nhật ảnh đại diện biến thể"}
 
 # ==========================================
-# 13. API XOÁ ẢNH GALLERY BIẾN THỂ ✅ MỚI
+# 13. API XOÁ ẢNH GALLERY BIẾN THỂ
 # ==========================================
 @router.delete("/variants/gallery/{image_id}")
 async def delete_variant_gallery_image(
