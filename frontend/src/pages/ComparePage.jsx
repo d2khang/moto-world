@@ -1,47 +1,70 @@
 import React, { useState } from 'react';
 import { useCompare } from '../context/CompareContext';
 import { Link } from 'react-router-dom';
-import { Trash2, Plus, ArrowRight, X, AlertTriangle, Zap, Wrench, Ruler, CheckCircle2 } from 'lucide-react';
+import { Plus, ArrowRight, X, AlertTriangle, Zap, Wrench, Ruler, Activity } from 'lucide-react';
 import BikeSelectModal from '../components/BikeSelectModal';
 
 const ComparePage = () => {
   const { compareList, removeFromCompare, addToCompare } = useCompare();
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Helper parse JSON
-  const getSpecs = (bike) => {
-    try { return JSON.parse(bike.description); } catch { return {}; }
-  };
-
-  const handleSelectBike = (bike) => {
-    addToCompare(bike);
-    setIsModalOpen(false);
-  }
-
-  // Định nghĩa các nhóm thông số
+  // --- CẤU HÌNH CÁC NHÓM THÔNG SỐ (Mapping với Database) ---
   const specGroups = [
     {
         title: "Động cơ & Hiệu suất",
         icon: <Zap className="w-5 h-5 text-yellow-400"/>,
         color: "from-yellow-500/20 to-orange-500/5",
         border: "border-yellow-500/30",
-        keys: ["Loại động cơ", "Dung tích", "Công suất cực đại", "Mô-men xoắn cực đại", "Hộp số", "Tiêu thụ nhiên liệu"]
-    },
-    {
-        title: "Kết cấu & Phanh",
-        icon: <Wrench className="w-5 h-5 text-blue-400"/>,
-        color: "from-blue-500/20 to-cyan-500/5",
-        border: "border-blue-500/30",
-        keys: ["Khung xe", "Hệ thống treo trước", "Hệ thống treo sau", "Phanh trước", "Phanh sau", "Lốp trước", "Lốp sau"]
+        // 'key' phải trùng với tên cột trong models.py (TechnicalSpecification hoặc Bike)
+        items: [
+            { key: "engine_type", label: "Loại động cơ", unit: "" },
+            { key: "engine_cc", label: "Dung tích (cc)", unit: "cc" }, // Trường này nằm ở bảng Bike
+            { key: "power_hp", label: "Công suất tối đa", unit: "HP" },
+            { key: "torque_nm", label: "Mô-men xoắn", unit: "Nm" },
+            { key: "top_speed_kmh", label: "Tốc độ tối đa", unit: "km/h" },
+            { key: "transmission", label: "Hộp số", unit: "" },
+        ]
     },
     {
         title: "Kích thước & Trọng lượng",
         icon: <Ruler className="w-5 h-5 text-red-400"/>,
         color: "from-red-500/20 to-pink-500/5",
         border: "border-red-500/30",
-        keys: ["Dài x Rộng x Cao", "Chiều cao yên", "Chiều dài cơ sở", "Khoảng sáng gầm", "Khối lượng ướt", "Dung tích bình xăng"]
+        items: [
+            { key: "weight_kg", label: "Trọng lượng ướt", unit: "kg" },
+            { key: "seat_height_mm", label: "Chiều cao yên", unit: "mm" },
+            { key: "fuel_capacity_l", label: "Dung tích bình xăng", unit: "Lít" },
+        ]
     }
   ];
+
+  // --- HÀM LẤY GIÁ TRỊ THÔNG MINH ---
+  const getSpecValue = (bike, key, unit) => {
+    let value = null;
+
+    // 1. Ưu tiên lấy từ bảng Bike (ví dụ: engine_cc)
+    if (bike.hasOwnProperty(key)) {
+        value = bike[key];
+    } 
+    // 2. Nếu không có, lấy trong bảng TechnicalSpecification (bike.specs)
+    else if (bike.specs && bike.specs.hasOwnProperty(key)) {
+        value = bike.specs[key];
+    }
+
+    // 3. Xử lý hiển thị
+    if (value === null || value === undefined || value === "") {
+        return <span className="text-slate-600 text-xs italic">---</span>;
+    }
+
+    // Nếu là engine_cc, API trả về số nguyên, ta nối thêm unit
+    // Nếu unit rỗng (như loại động cơ), chỉ trả về giá trị
+    return unit ? `${value} ${unit}` : value;
+  };
+
+  const handleSelectBike = (bike) => {
+    addToCompare(bike);
+    setIsModalOpen(false);
+  }
 
   return (
     <div className="min-h-screen bg-[#0B1120] text-slate-200 pt-24 pb-20 px-4 relative overflow-hidden font-sans">
@@ -69,7 +92,7 @@ const ComparePage = () => {
         {compareList.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 bg-slate-800/30 backdrop-blur-sm rounded-3xl border border-dashed border-slate-700 max-w-2xl mx-auto hover:border-blue-500/50 transition-colors group">
                 <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mb-6 shadow-2xl group-hover:scale-110 transition-transform duration-500">
-                    <AlertTriangle size={32} className="text-slate-500 group-hover:text-blue-400 transition-colors"/>
+                    <Activity size={32} className="text-slate-500 group-hover:text-blue-400 transition-colors"/>
                 </div>
                 <h2 className="text-2xl font-bold text-white mb-2">Chưa có xe nào để so sánh</h2>
                 <p className="text-slate-400 mb-8 text-sm">Vui lòng chọn ít nhất 2 xe để thấy sự khác biệt</p>
@@ -158,25 +181,19 @@ const ComparePage = () => {
                                 </tr>
 
                                 {/* Các dòng thông số con */}
-                                {group.keys.map((key, rowIdx) => (
-                                    <tr key={key} className="group/row hover:bg-slate-800/40 transition-colors border-b border-slate-800/50">
-                                        {/* Tên thông số (Sticky trái trên mobile nếu cần, ở đây desktop ok) */}
+                                {group.items.map((item, rowIdx) => (
+                                    <tr key={item.key} className="group/row hover:bg-slate-800/40 transition-colors border-b border-slate-800/50">
+                                        {/* Tên thông số */}
                                         <td className="p-4 text-slate-400 text-sm font-medium bg-[#0B1120] border-r border-slate-800 group-hover/row:text-white transition-colors w-[250px]">
-                                            {key}
+                                            {item.label}
                                         </td>
 
                                         {/* Giá trị của từng xe */}
-                                        {compareList.map(bike => {
-                                            const specs = getSpecs(bike);
-                                            // Tìm giá trị trong engine, chassis hoặc dimensions
-                                            const val = specs.engine?.[key] || specs.chassis?.[key] || specs.dimensions?.[key] || "---";
-                                            
-                                            return (
-                                                <td key={bike.id} className="p-4 text-center font-bold text-slate-200 border-r border-slate-800/50 last:border-0 group-hover/row:bg-slate-800/20 transition-colors">
-                                                    {val}
-                                                </td>
-                                            )
-                                        })}
+                                        {compareList.map(bike => (
+                                            <td key={bike.id} className="p-4 text-center font-bold text-slate-200 border-r border-slate-800/50 last:border-0 group-hover/row:bg-slate-800/20 transition-colors">
+                                                {getSpecValue(bike, item.key, item.unit)}
+                                            </td>
+                                        ))}
 
                                         {/* Ô trống cho xe chưa thêm */}
                                         {[...Array(3 - compareList.length)].map((_, i) => (

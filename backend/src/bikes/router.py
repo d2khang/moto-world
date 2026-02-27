@@ -3,11 +3,12 @@ import uuid
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete, update
+from sqlalchemy import select, func, or_, delete, update, distinct
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator # ✅ Thêm field_validator
+from datetime import datetime                 # ✅ Thêm datetime
 
 from src.database import get_db
 from src.bikes.models import Make, Bike, BikeVariant, BikeVariantImage, Category, Color, TechnicalSpecification, BikeImage
@@ -19,7 +20,7 @@ from src.logs.utils import create_audit_log
 router = APIRouter()
 
 # ==========================================
-# SCHEMA CẬP NHẬT
+# SCHEMA CẬP NHẬT (ĐÃ FIX LỖI DATETIME)
 # ==========================================
 class BikeUpdate(BaseModel):
     name: Optional[str] = None
@@ -28,16 +29,30 @@ class BikeUpdate(BaseModel):
     color_id: Optional[int] = None
     price: Optional[float] = None
     discount_price: Optional[float] = None
-    discount_end_date: Optional[str] = None
+    
+    # ✅ Đổi từ str -> datetime
+    discount_end_date: Optional[datetime] = None  
+    
     engine_cc: Optional[int] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
     is_flash_sale: Optional[bool] = None
     flash_sale_price: Optional[float] = None
-    flash_sale_start: Optional[str] = None
-    flash_sale_end: Optional[str] = None
+    
+    # ✅ Đổi từ str -> datetime
+    flash_sale_start: Optional[datetime] = None   
+    flash_sale_end: Optional[datetime] = None     
+    
     flash_sale_limit: Optional[int] = None
     specs: Optional[dict] = None
+
+    # ✅ Validator: Xử lý chuỗi rỗng thành None để tránh lỗi parse
+    @field_validator('discount_end_date', 'flash_sale_start', 'flash_sale_end', mode='before')
+    @classmethod
+    def parse_datetime_fields(cls, v):
+        if v == "" or v is None:
+            return None
+        return v 
 
 # ==========================================
 # HELPERS
@@ -58,25 +73,57 @@ async def ensure_attributes_exist(db: AsyncSession, brand: str = None, type_: st
     await db.flush()
 
 def get_bike_with_relations(bike_id: int):
-    """
-    Helper load đầy đủ quan hệ:
-    - Hãng xe (Make)
-    - Thông số (Specs)
-    - Gallery chung (Images)
-    - Biến thể (Variants) VÀ Gallery riêng của từng biến thể (BikeVariant -> Images)
-    """
     return (
         select(Bike).where(Bike.id == bike_id).options(
             selectinload(Bike.make),
             selectinload(Bike.specs),
             selectinload(Bike.images),
-            # --- QUAN TRỌNG: Load sâu vào trong variant để lấy images ---
             selectinload(Bike.variants).selectinload(BikeVariant.images) 
         )
     )
 
 # ==========================================
-# 1. API TẠO XE MỚI
+# API LẤY DỮ LIỆU BỘ LỌC
+# ==========================================
+@router.get("/filters")
+async def get_bike_filters(db: AsyncSession = Depends(get_db)):
+    """
+    Trả về danh sách lọc: Hãng, Loại, Màu (gộp từ Variant)
+    VÀ Giá cao nhất, CC cao nhất thực tế trong DB.
+    """
+    makes = (await db.execute(select(Make.name).distinct().order_by(Make.name))).scalars().all()
+    types = (await db.execute(select(Bike.type).distinct().where(Bike.type.isnot(None)))).scalars().all()
+    
+    # Lấy màu từ cả bảng Color VÀ bảng BikeVariant
+    colors_standard = (await db.execute(select(Color.name))).scalars().all()
+    colors_variant = (await db.execute(
+        select(BikeVariant.color_name)
+        .where(BikeVariant.color_name.isnot(None))
+        .where(BikeVariant.color_name != "")
+        .distinct()
+    )).scalars().all()
+
+    unique_colors = set()
+    if colors_standard: unique_colors.update([c.strip() for c in colors_standard if c])
+    if colors_variant: unique_colors.update([c.strip() for c in colors_variant if c])
+    
+    final_colors = sorted(list(unique_colors))
+
+    stats = (await db.execute(select(func.max(Bike.price).label("max_price"), func.max(Bike.engine_cc).label("max_cc")))).one_or_none()
+    
+    max_price = stats.max_price if stats and stats.max_price else 2000000000
+    max_cc = stats.max_cc if stats and stats.max_cc else 1000
+
+    return {
+        "brands": makes,
+        "types": types,
+        "colors": final_colors,
+        "max_price": max_price,
+        "max_cc": max_cc
+    }
+
+# ==========================================
+# API CRUD
 # ==========================================
 @router.post("/", response_model=BikeResponse, status_code=status.HTTP_201_CREATED)
 async def create_bike(
@@ -97,7 +144,7 @@ async def create_bike(
             make = (await db.execute(select(Make).where(Make.name == bike_data.get('brand')))).scalar_one()
             bike_data['make_id'] = make.id
         except:
-            pass # Handle case where brand creation might have failed or race condition
+            pass
 
     bike_data.pop('brand', None)
 
@@ -123,9 +170,6 @@ async def create_bike(
         await db.rollback()
         raise HTTPException(status_code=400, detail="Lỗi dữ liệu: Trùng tên hoặc lỗi ràng buộc.")
 
-# ==========================================
-# 2. API UPLOAD GALLERY XE (CHUNG)
-# ==========================================
 @router.post("/{bike_id}/gallery", status_code=201)
 async def upload_bike_gallery(
     bike_id: int,
@@ -157,9 +201,6 @@ async def upload_bike_gallery(
     await db.commit()
     return {"message": f"Đã upload {len(saved_images)} ảnh", "urls": saved_images}
 
-# ==========================================
-# 3. API ĐẶT ẢNH ĐẠI DIỆN CHÍNH
-# ==========================================
 @router.put("/gallery/{image_id}/set-primary")
 async def set_primary_image(
     image_id: int,
@@ -179,9 +220,6 @@ async def set_primary_image(
     await db.commit()
     return {"message": "Đã cập nhật ảnh đại diện mới"}
 
-# ==========================================
-# 4. API XOÁ ẢNH GALLERY XE
-# ==========================================
 @router.delete("/gallery/{image_id}")
 async def delete_gallery_image(
     image_id: int,
@@ -196,9 +234,6 @@ async def delete_gallery_image(
     await db.commit()
     return {"message": "Đã xóa ảnh khỏi bộ sưu tập"}
 
-# ==========================================
-# 5. API LẤY CHI TIẾT XE
-# ==========================================
 @router.get("/{bike_id}", response_model=BikeResponse)
 async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(get_bike_with_relations(bike_id))
@@ -207,9 +242,6 @@ async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại.")
     return bike
 
-# ==========================================
-# 6. API DANH SÁCH XE
-# ==========================================
 @router.get("/")
 async def list_bikes(
     page: int = Query(1, ge=1),
@@ -219,6 +251,8 @@ async def list_bikes(
     color: Optional[str] = None,
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
+    min_cc: Optional[int] = None,
+    max_cc: Optional[int] = None,
     is_flash_sale: Optional[bool] = None,
     db: AsyncSession = Depends(get_db)
 ):
@@ -226,7 +260,6 @@ async def list_bikes(
         selectinload(Bike.make),
         selectinload(Bike.specs),
         selectinload(Bike.images),
-        # --- QUAN TRỌNG: Load ảnh variant cho danh sách ---
         selectinload(Bike.variants).selectinload(BikeVariant.images)
     ).distinct()
 
@@ -236,16 +269,21 @@ async def list_bikes(
 
     if color:
         stmt = stmt.outerjoin(BikeVariant).outerjoin(Color).where(
-            or_(Color.name.ilike(f"%{color}%"), BikeVariant.name.ilike(f"%{color}%"))
+            or_(
+                Color.name.ilike(f"%{color}%"),
+                BikeVariant.color_name.ilike(f"%{color}%")
+            )
         )
 
     if min_price: stmt = stmt.where(Bike.price >= min_price)
     if max_price: stmt = stmt.where(Bike.price <= max_price)
+    if min_cc: stmt = stmt.where(Bike.engine_cc >= min_cc)
+    if max_cc: stmt = stmt.where(Bike.engine_cc <= max_cc)
 
     count_stmt = select(func.count(func.distinct(Bike.id))).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    stmt = stmt.limit(size).offset((page - 1) * size)
+    stmt = stmt.order_by(Bike.created_at.desc()).limit(size).offset((page - 1) * size)
     bikes = (await db.execute(stmt)).scalars().all()
 
     return {
@@ -256,9 +294,6 @@ async def list_bikes(
         "total_pages": (total + size - 1) // size if total > 0 else 1
     }
 
-# ==========================================
-# 7. API CẬP NHẬT XE
-# ==========================================
 @router.put("/{bike_id}", response_model=BikeResponse)
 async def update_bike(
     bike_id: int,
@@ -272,6 +307,7 @@ async def update_bike(
     if not bike:
         raise HTTPException(404, "Không tìm thấy xe")
 
+    # update_data sẽ chứa các trường datetime đã được convert từ string
     update_data = bike_update.model_dump(exclude_unset=True)
 
     specs_data = update_data.pop('specs', None)
@@ -289,9 +325,6 @@ async def update_bike(
     await db.refresh(bike)
     return bike
 
-# ==========================================
-# 8. API XOÁ XE
-# ==========================================
 @router.delete("/{bike_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bike(
     bike_id: int,
@@ -307,9 +340,6 @@ async def delete_bike(
     await db.commit()
     return None
 
-# ==========================================
-# 9. API CẬP NHẬT BIẾN THỂ BULK (LƯU Ý: XOÁ CŨ LẬP MỚI)
-# ==========================================
 @router.post("/{bike_id}/variants/bulk", status_code=201)
 async def create_bulk_variants(
     bike_id: int,
@@ -322,27 +352,20 @@ async def create_bulk_variants(
     if not bike:
         raise HTTPException(404, "Xe không tồn tại")
 
-    # Lưu ý: Logic này xoá toàn bộ biến thể cũ và tạo lại. 
-    # Nếu biến thể cũ có ảnh riêng, ảnh đó sẽ mất liên kết trong DB (file vẫn còn trên ổ cứng).
-    # Để giữ ảnh, cần logic phức tạp hơn (update thay vì delete).
-    
-    # 1. Xóa ảnh variant cũ khỏi DB
     old_variants = (await db.execute(select(BikeVariant).where(BikeVariant.bike_id == bike_id))).scalars().all()
     for v in old_variants:
         await db.execute(delete(BikeVariantImage).where(BikeVariantImage.variant_id == v.id))
     
-    # 2. Xóa variant cũ
     await db.execute(delete(BikeVariant).where(BikeVariant.bike_id == bike_id))
 
-    # 3. Tạo variant mới
     for v in variants_in:
         new_variant = BikeVariant(
             bike_id=bike_id,
             name=v.name,
             price=v.price,
-            quantity=v.quantity,       # ✅ Default 0
-            color_name=v.color_name,   # ✅ Tên màu
-            color_hex=v.color_hex,     # ✅ Mã màu hex
+            quantity=v.quantity,       
+            color_name=v.color_name,  
+            color_hex=v.color_hex,    
             image_url=v.image_url if v.image_url else bike.image_url
         )
         db.add(new_variant)
@@ -350,9 +373,6 @@ async def create_bulk_variants(
     await db.commit()
     return {"message": f"Đã cập nhật {len(variants_in)} phiên bản thành công"}
 
-# ==========================================
-# 10. API UPLOAD GALLERY BIẾN THỂ
-# ==========================================
 @router.post("/{bike_id}/variants/{variant_id}/gallery", status_code=201)
 async def upload_variant_gallery(
     bike_id: int,
@@ -370,7 +390,6 @@ async def upload_variant_gallery(
     upload_dir = f"static/uploads/variants/{variant_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Kiểm tra đã có ảnh primary chưa
     existing_primary = (await db.execute(
         select(BikeVariantImage).where(
             BikeVariantImage.variant_id == variant_id,
@@ -389,22 +408,18 @@ async def upload_variant_gallery(
 
         url = f"http://localhost:8000/{path}"
         
-        # Logic: Nếu chưa có ảnh primary nào trong DB VÀ đây là ảnh đầu tiên trong batch upload
         is_primary = (len(saved) == 0 and existing_primary is None)
 
         db.add(BikeVariantImage(variant_id=variant_id, image_url=url, is_primary=is_primary))
 
         if is_primary:
-            variant.image_url = url  # Cập nhật ảnh đại diện variant
+            variant.image_url = url 
 
         saved.append(url)
 
     await db.commit()
     return {"message": f"Đã upload {len(saved)} ảnh cho biến thể", "urls": saved}
 
-# ==========================================
-# 11. API LẤY GALLERY BIẾN THỂ
-# ==========================================
 @router.get("/{bike_id}/variants/{variant_id}/gallery")
 async def get_variant_gallery(
     bike_id: int,
@@ -426,9 +441,6 @@ async def get_variant_gallery(
         "images": [{"id": img.id, "url": img.image_url, "is_primary": img.is_primary} for img in images]
     }
 
-# ==========================================
-# 12. API ĐẶT ẢNH PRIMARY BIẾN THỂ
-# ==========================================
 @router.put("/variants/gallery/{image_id}/set-primary")
 async def set_variant_primary_image(
     image_id: int,
@@ -453,9 +465,6 @@ async def set_variant_primary_image(
     await db.commit()
     return {"message": "Đã cập nhật ảnh đại diện biến thể"}
 
-# ==========================================
-# 13. API XOÁ ẢNH GALLERY BIẾN THỂ
-# ==========================================
 @router.delete("/variants/gallery/{image_id}")
 async def delete_variant_gallery_image(
     image_id: int,

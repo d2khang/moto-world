@@ -12,7 +12,7 @@ import toast from 'react-hot-toast'
 /**
  * File: BikeDetailPage.jsx
  * Chức năng: Hiển thị chi tiết xe.
- * ĐẶC BIỆT: Logic lọc ảnh chỉ hiển thị ảnh của biến thể (màu) đang chọn.
+ * CẬP NHẬT: Logic lọc ảnh biến thể triệt để (chỉ hiện ảnh của màu đang chọn).
  */
 
 function BikeDetailPage() {
@@ -43,11 +43,8 @@ function BikeDetailPage() {
             setSelectedVariant(res.data.variants[0])
         }
 
-        // Mặc định hiển thị ảnh của biến thể đầu tiên (nếu có)
-        const initialImg = (res.data.variants && res.data.variants[0]?.image_url) 
-            ? res.data.variants[0].image_url 
-            : res.data.image_url
-        setActiveImage(initialImg)
+        // Mặc định hiển thị ảnh đại diện xe
+        setActiveImage(res.data.image_url)
 
       } catch (error) {
         console.error("Lỗi:", error)
@@ -84,10 +81,17 @@ function BikeDetailPage() {
     return () => clearInterval(timer);
   }, [bike]);
 
-  // 3. TỰ ĐỘNG ĐỔI ẢNH LỚN KHI CHỌN MÀU (BIẾN THỂ) KHÁC
+  // 3. TỰ ĐỘNG ĐỔI ẢNH LỚN KHI CHỌN MÀU
   useEffect(() => {
-      if (selectedVariant && selectedVariant.image_url) {
-          setActiveImage(selectedVariant.image_url)
+      if (selectedVariant) {
+          // Ưu tiên 1: Ảnh đầu tiên trong gallery riêng của biến thể
+          if (selectedVariant.images && selectedVariant.images.length > 0) {
+              setActiveImage(selectedVariant.images[0].image_url)
+          } 
+          // Ưu tiên 2: Ảnh đại diện của biến thể
+          else if (selectedVariant.image_url) {
+              setActiveImage(selectedVariant.image_url)
+          }
       }
   }, [selectedVariant])
 
@@ -222,34 +226,29 @@ function BikeDetailPage() {
   const isOutOfStock = (currentQuantity || 0) <= 0;
 
   // ============================================================
-  // LOGIC LỌC ẢNH THÔNG MINH (UPDATED)
-  // Chỉ hiển thị ảnh của biến thể đang chọn.
+  // LOGIC LỌC ẢNH ĐỘC QUYỀN (CHỈ HIỆN ẢNH CỦA BIẾN THỂ ĐÓ)
   // ============================================================
   
   let displayImages = []
   
   if (selectedVariant) {
-      // 1. Lấy ảnh đại diện của biến thể
-      if (selectedVariant.image_url) {
+      // 1. Nếu biến thể có Album ảnh riêng, lấy hết
+      if (selectedVariant.images && selectedVariant.images.length > 0) {
+          displayImages = selectedVariant.images.map(img => img.image_url)
+      } 
+      // 2. Nếu không có album riêng, lấy ảnh đại diện của biến thể
+      else if (selectedVariant.image_url) {
           displayImages.push(selectedVariant.image_url)
       }
-      
-      // 2. Lấy album ảnh riêng của biến thể (Từ Backend mới đã gửi kèm)
-      if (selectedVariant.images && selectedVariant.images.length > 0) {
-          const variantGallery = selectedVariant.images.map(img => img.image_url)
-          displayImages = [...displayImages, ...variantGallery]
-      }
   }
 
-  // 3. Fallback: Chỉ khi nào không có bất kỳ ảnh nào của biến thể, mới dùng ảnh chung của xe
-  // (Để tránh việc chọn màu Đỏ mà lại hiện ảnh màu Xanh từ gallery chung)
+  // 3. Nếu chưa chọn biến thể nào hoặc biến thể không có ảnh -> Dùng ảnh chung của xe
   if (displayImages.length === 0) {
       if (bike.image_url) displayImages.push(bike.image_url)
-      // Nếu muốn hiển thị gallery chung khi không có ảnh biến thể, bỏ comment dòng dưới:
-      // if (bike.images) displayImages = [...displayImages, ...bike.images.map(i => i.image_url)]
+      if (bike.images) displayImages = [...displayImages, ...bike.images.map(i => i.image_url)]
   }
 
-  // 4. Lọc trùng lặp (Unique)
+  // 4. Lọc trùng lặp
   const allImages = displayImages.filter((url, index, self) => url && self.indexOf(url) === index)
 
   return (
@@ -316,7 +315,7 @@ function BikeDetailPage() {
                  <h3 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3">Lựa chọn phiên bản:</h3>
                  <div className="flex flex-wrap gap-3">
                     {bike.variants.map((v) => (
-                       <button key={v.id} onClick={() => setSelectedVariant(v)} className={`flex items-center gap-2 px-4 py-3 rounded-xl border transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-lg shadow-blue-500/10' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                       <button key={v.id} onClick={() => setSelectedVariant(v)} className={`flex items-center gap-2 px-4 py-3 rounded-xl border transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-lg shadow-blue-500/10 ring-1 ring-blue-500' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
                           {v.image_url && <img src={v.image_url} className="w-6 h-6 rounded object-cover" />}
                           <span className="font-bold text-sm uppercase">{v.name}</span>
                        </button>

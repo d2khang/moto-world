@@ -4,9 +4,21 @@ import axios from 'axios'
 import { 
   Plus, Trash2, Save, Package, Percent, 
   Layers, Settings, Wrench, Loader2, X, 
-  CheckCircle2, Camera, Upload, Image as ImageIcon
+  CheckCircle2, Camera, Upload, Image as ImageIcon, Zap
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+// --- CẤU HÌNH NHÃN TIẾNG VIỆT CHO THÔNG SỐ ---
+const SPEC_FIELDS = [
+  { key: 'engine_type', label: 'Loại động cơ', placeholder: 'VD: 4 thì, 4 xi-lanh' },
+  { key: 'transmission', label: 'Hộp số', placeholder: 'VD: 6 cấp' },
+  { key: 'power_hp', label: 'Công suất (HP)', type: 'number' },
+  { key: 'torque_nm', label: 'Mô-men xoắn (Nm)', type: 'number' },
+  { key: 'top_speed_kmh', label: 'Tốc độ tối đa (km/h)', type: 'number' },
+  { key: 'seat_height_mm', label: 'Chiều cao yên (mm)', type: 'number' },
+  { key: 'weight_kg', label: 'Trọng lượng (kg)', type: 'number' },
+  { key: 'fuel_capacity_l', label: 'Dung tích bình xăng (L)', type: 'number' },
+]
 
 // --- CÁC COMPONENT GIAO DIỆN ---
 const SectionHeader = ({ icon: Icon, title, color }) => (
@@ -37,17 +49,19 @@ function AddBikePage() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
 
-  // --- 1. STATE THÔNG TIN XE & ẢNH ĐẠI DIỆN CHÍNH ---
+  // --- 1. STATE THÔNG TIN XE & KHUYẾN MÃI ---
   const [formData, setFormData] = useState({
     name: '', brand: '', type: 'Sport', price: '', 
     engine_cc: '', description: '', quantity: 0,
+    // GIẢM GIÁ & FLASH SALE
+    discount_price: '', discount_end_date: '',
     is_flash_sale: false, flash_sale_price: '', flash_sale_limit: '',
     flash_sale_start: '', flash_sale_end: ''
   })
   const [mainFile, setMainFile] = useState(null)
   const [mainPreview, setMainPreview] = useState(null)
 
-  // --- 2. STATE BIẾN THỂ (Nhiều ảnh cho mỗi màu) ---
+  // --- 2. STATE BIẾN THỂ ---
   const [variants, setVariants] = useState([
     { name: '', price: '', quantity: 1, files: [], previews: [] } 
   ])
@@ -123,12 +137,31 @@ function AddBikePage() {
     const toastId = toast.loading("Đang xử lý dữ liệu...")
 
     try {
-      // BƯỚC 1: TẠO XE (TRỐNG ẢNH ĐỂ CẬP NHẬT SAU)
+      // ✅ XỬ LÝ DATA: Chuyển Number/parseFloat cho phép số lẻ
       const bikePayload = {
         ...formData,
         price: Number(formData.price),
         engine_cc: Number(formData.engine_cc) || 0,
-        specs: { ...specs, power_hp: parseFloat(specs.power_hp), torque_nm: parseFloat(specs.torque_nm) }
+        
+        discount_price: formData.discount_price ? Number(formData.discount_price) : null,
+        discount_end_date: formData.discount_end_date || null,
+        
+        is_flash_sale: formData.is_flash_sale,
+        flash_sale_price: formData.is_flash_sale && formData.flash_sale_price ? Number(formData.flash_sale_price) : null,
+        flash_sale_limit: formData.is_flash_sale && formData.flash_sale_limit ? Number(formData.flash_sale_limit) : 0,
+        flash_sale_start: formData.is_flash_sale ? formData.flash_sale_start : null,
+        flash_sale_end: formData.is_flash_sale ? formData.flash_sale_end : null,
+        
+        specs: { 
+            ...specs, 
+            // ✅ SỬA LỖI QUAN TRỌNG: Dùng parseFloat cho TẤT CẢ thông số số
+            power_hp: parseFloat(specs.power_hp) || 0, 
+            torque_nm: parseFloat(specs.torque_nm) || 0,
+            fuel_capacity_l: parseFloat(specs.fuel_capacity_l) || 0,
+            seat_height_mm: parseFloat(specs.seat_height_mm) || 0, // Đã đổi sang float
+            weight_kg: parseFloat(specs.weight_kg) || 0,           // Đã đổi sang float
+            top_speed_kmh: parseFloat(specs.top_speed_kmh) || 0    // Đã đổi sang float
+        }
       }
 
       const createRes = await axios.post('http://localhost:8000/api/bikes/', bikePayload, {
@@ -136,9 +169,9 @@ function AddBikePage() {
       })
       const newBikeId = createRes.data.id
 
-      // BƯỚC 2: GOM TẤT CẢ ẢNH ĐỂ UPLOAD (Ảnh chính + Ảnh các màu)
+      // UPLOAD ẢNH
       const allFiles = [mainFile]
-      const photoCounts = [1] // Ảnh chính là 1 tấm
+      const photoCounts = [1] 
       variants.forEach(v => {
           allFiles.push(...v.files)
           photoCounts.push(v.files.length)
@@ -152,13 +185,13 @@ function AddBikePage() {
       })
       const uploadedUrls = uploadRes.data.urls
 
-      // BƯỚC 3: CẬP NHẬT ẢNH ĐẠI DIỆN CHO XE
+      // CẬP NHẬT ẢNH CHÍNH
       await axios.put(`http://localhost:8000/api/bikes/${newBikeId}`, { image_url: uploadedUrls[0] }, {
           headers: { Authorization: `Bearer ${token}` }
       })
 
-      // BƯỚC 4: TẠO BIẾN THỂ MÀU SẮC
-      let pointer = 1 // Bắt đầu sau tấm ảnh đại diện đầu tiên
+      // TẠO BIẾN THỂ
+      let pointer = 1 
       const finalVariants = variants.map((v, idx) => {
           const count = photoCounts[idx + 1]
           const myUrls = uploadedUrls.slice(pointer, pointer + count)
@@ -167,7 +200,7 @@ function AddBikePage() {
               name: v.name,
               price: Number(v.price) || Number(formData.price),
               quantity: Number(v.quantity),
-              image_url: myUrls.length > 0 ? myUrls[0] : uploadedUrls[0] // Lấy ảnh đầu của màu, ko có thì lấy ảnh chính
+              image_url: myUrls.length > 0 ? myUrls[0] : uploadedUrls[0] 
           }
       })
 
@@ -197,12 +230,12 @@ function AddBikePage() {
       <form onSubmit={handleSubmit} className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         <div className="lg:col-span-2 space-y-8">
-          {/* 1. THÔNG TIN CƠ BẢN & ẢNH ĐẠI DIỆN CHÍNH */}
+          {/* 1. THÔNG TIN CƠ BẢN */}
           <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 shadow-xl">
             <SectionHeader icon={Settings} title="Thông Tin & Ảnh Đại Diện Xe" color="text-blue-400" />
             
             <div className="flex flex-col md:flex-row gap-8">
-                {/* Khu vực Upload Ảnh Chính */}
+                {/* Upload Ảnh */}
                 <div className="w-full md:w-1/3">
                     <label className="text-sm font-bold text-slate-400 mb-2 block uppercase tracking-widest">Ảnh bìa sản phẩm</label>
                     <div className="relative group aspect-[3/4] border-2 border-dashed border-slate-700 rounded-2xl overflow-hidden bg-slate-950 flex flex-col items-center justify-center hover:border-green-500 transition-all cursor-pointer">
@@ -228,30 +261,83 @@ function AddBikePage() {
                             </select>
                         </InputGroup>
                     </div>
-                    <InputGroup label="Giá niêm yết (VNĐ)" required><StyledInput type="number" name="price" onChange={handleChange} className="text-green-400 font-bold font-mono" /></InputGroup>
+                    {/* ✅ step="any" cho Giá niêm yết */}
+                    <InputGroup label="Giá niêm yết (VNĐ)" required><StyledInput type="number" step="any" name="price" onChange={handleChange} className="text-green-400 font-bold font-mono" /></InputGroup>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-              <InputGroup label="Phân khối (cc)"><StyledInput type="number" name="engine_cc" onChange={handleChange} /></InputGroup>
+              {/* ✅ step="any" cho Phân khối */}
+              <InputGroup label="Phân khối (cc)"><StyledInput type="number" step="any" name="engine_cc" onChange={handleChange} /></InputGroup>
               <InputGroup label="Tồn kho"><div className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-center font-bold text-yellow-500">{formData.quantity}</div></InputGroup>
               <div className="md:col-span-2"><InputGroup label="Mô tả"><textarea name="description" rows="3" onChange={handleChange} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 focus:border-green-500 outline-none resize-none" /></InputGroup></div>
             </div>
           </div>
 
+          {/* 2. THIẾT LẬP KHUYẾN MÃI (GIẢM GIÁ & FLASH SALE) */}
+          <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 shadow-xl">
+             <SectionHeader icon={Percent} title="Thiết Lập Khuyến Mãi" color="text-red-500" />
+             
+             {/* Giảm giá thường */}
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <InputGroup label="Giá khuyến mãi (VNĐ)" subLabel="(Để trống nếu không giảm)">
+                    {/* ✅ step="any" */}
+                    <StyledInput type="number" step="any" name="discount_price" onChange={handleChange} className="text-red-400 font-mono font-bold" />
+                </InputGroup>
+                <InputGroup label="Ngày kết thúc khuyến mãi">
+                    <StyledInput type="datetime-local" name="discount_end_date" onChange={handleChange} className="text-sm" />
+                </InputGroup>
+             </div>
+
+             {/* Flash Sale */}
+             <div className="border-t border-slate-800 pt-6">
+                <div className="flex items-center gap-3 mb-4">
+                    <input 
+                        type="checkbox" 
+                        id="is_flash_sale" 
+                        name="is_flash_sale" 
+                        checked={formData.is_flash_sale} 
+                        onChange={handleChange}
+                        className="w-5 h-5 accent-yellow-500 cursor-pointer"
+                    />
+                    <label htmlFor="is_flash_sale" className="font-bold text-yellow-400 flex items-center gap-2 cursor-pointer select-none">
+                        <Zap size={18} className={formData.is_flash_sale ? "fill-yellow-400" : ""} /> Kích hoạt Flash Sale
+                    </label>
+                </div>
+
+                {formData.is_flash_sale && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-yellow-500/5 p-4 rounded-xl border border-yellow-500/20 animate-in fade-in slide-in-from-top-2">
+                        {/* ✅ step="any" */}
+                        <InputGroup label="Giá Flash Sale" required><StyledInput type="number" step="any" name="flash_sale_price" onChange={handleChange} className="text-yellow-400 font-bold" /></InputGroup>
+                        <InputGroup label="Giới hạn số lượng" required><StyledInput type="number" name="flash_sale_limit" onChange={handleChange} /></InputGroup>
+                        <InputGroup label="Bắt đầu"><StyledInput type="datetime-local" name="flash_sale_start" onChange={handleChange} /></InputGroup>
+                        <InputGroup label="Kết thúc"><StyledInput type="datetime-local" name="flash_sale_end" onChange={handleChange} /></InputGroup>
+                    </div>
+                )}
+             </div>
+          </div>
+
+          {/* 3. THÔNG SỐ KỸ THUẬT */}
           <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 shadow-xl">
              <SectionHeader icon={Wrench} title="Thông Số Kỹ Thuật" color="text-orange-400" />
              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Object.keys(specs).map(key => (
-                   <InputGroup key={key} label={key.replace(/_/g,' ').toUpperCase()}>
-                      <StyledInput name={key} onChange={(e) => setSpecs({...specs, [e.target.name]: e.target.value})} />
+                {SPEC_FIELDS.map((field) => (
+                   <InputGroup key={field.key} label={field.label}>
+                      <StyledInput 
+                        type={field.type || 'text'}
+                        name={field.key} 
+                        // ✅ ĐÃ THÊM: step="any" để nhập số lẻ cho mọi thông số số
+                        step={field.type === 'number' ? "any" : undefined}
+                        onChange={(e) => setSpecs({...specs, [e.target.name]: e.target.value})}
+                        placeholder={field.placeholder || ''} 
+                      />
                    </InputGroup>
                 ))}
              </div>
           </div>
         </div>
 
-        {/* --- CỘT PHẢI: PHIÊN BẢN MÀU SẮC (NHIỀU ẢNH RIÊNG) --- */}
+        {/* CỘT PHẢI: BIẾN THỂ */}
         <div className="space-y-8">
            <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 shadow-xl sticky top-24 max-h-[calc(100vh-150px)] flex flex-col">
               <div className="flex justify-between mb-4 flex-shrink-0">
@@ -263,16 +349,13 @@ function AddBikePage() {
                  {variants.map((v, i) => (
                     <div key={i} className="bg-slate-950 p-4 rounded-xl border border-slate-800 relative group">
                        <button type="button" onClick={() => removeVariant(i)} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10"><X size={12}/></button>
-                       
                        <div className="space-y-4">
                           <input type="text" value={v.name} onChange={(e) => handleVariantChange(i, 'name', e.target.value)} className="w-full bg-transparent border-b border-slate-700 focus:border-yellow-500 outline-none text-sm text-yellow-500 font-bold pb-1 uppercase" placeholder="Tên màu (VD: Đỏ Đô)" />
-                          
                           <div className="flex gap-2">
-                             <InputGroup label="Giá"><StyledInput type="number" value={v.price} onChange={(e) => handleVariantChange(i, 'price', e.target.value)} className="px-2 py-1.5 text-xs" /></InputGroup>
+                             {/* ✅ step="any" */}
+                             <InputGroup label="Giá"><StyledInput type="number" step="any" value={v.price} onChange={(e) => handleVariantChange(i, 'price', e.target.value)} className="px-2 py-1.5 text-xs" /></InputGroup>
                              <InputGroup label="SL"><StyledInput type="number" value={v.quantity} onChange={(e) => handleVariantChange(i, 'quantity', e.target.value)} className="px-2 py-1.5 text-xs text-center" /></InputGroup>
                           </div>
-
-                          {/* NHIỀU ẢNH CHO MỖI MÀU */}
                           <div>
                              <label className="text-[10px] uppercase text-slate-500 font-bold mb-2 block tracking-widest flex items-center gap-1"><ImageIcon size={10}/> Gallery màu {v.name || '...'}</label>
                              <div className="grid grid-cols-3 gap-2">
