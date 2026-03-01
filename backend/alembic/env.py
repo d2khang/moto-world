@@ -11,7 +11,7 @@ from alembic import context
 from src.core.config import settings
 from src.database import Base
 
-# --- 2. IMPORT TẤT CẢ MODELS ---
+# --- 2. IMPORT TẤT CẢ MODELS (Để Alembic tạo bảng) ---
 from src.auth.models import User 
 from src.bikes.models import (
     Bike, 
@@ -25,13 +25,7 @@ from src.bikes.models import (
 from src.orders.models import Order, OrderItem
 from src.coupons.models import Coupon
 from src.notifications.models import Notification
-
-# SỬA LẠI DÒNG NÀY:
 from src.logs.models import AuditLog 
-
-# Nếu có thêm Promo
-from src.promo.router import router as promo_router # Promo thường không có models riêng nếu chưa định nghĩa, nếu có thì import models
-# (Lưu ý: Nếu src.promo chưa có file models.py chứa class cụ thể thì bỏ qua dòng import promo model)
 
 # -------------------------------------------------------
 
@@ -42,9 +36,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Ghi đè URL trong alembic.ini bằng URL thực tế từ .env (PostgreSQL)
 config.set_main_option("sqlalchemy.url", str(settings.DATABASE_URL))
 
 def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -63,6 +59,9 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 async def run_async_migrations() -> None:
+    """In this scenario we need to create an Engine
+    and associate a connection with the context.
+    """
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -75,7 +74,14 @@ async def run_async_migrations() -> None:
     await connectable.dispose()
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    """Run migrations in 'online' mode."""
+    # Fix lỗi event loop trên Windows nếu có
+    try:
+        asyncio.run(run_async_migrations())
+    except RuntimeError:
+        # Trường hợp loop đã chạy sẵn
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(run_async_migrations())
 
 if context.is_offline_mode():
     run_migrations_offline()

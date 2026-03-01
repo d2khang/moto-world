@@ -43,7 +43,7 @@ export default function BikeListPage() {
             const res = await axios.get('http://127.0.0.1:8000/api/bikes/filters')
             setFilterOptions(res.data)
 
-            // ✅ LẤY GIÁ MAX TỪ DATABASE (Ví dụ DB có xe 5 tỷ, biến này sẽ là 5 tỷ)
+            // ✅ LẤY GIÁ MAX TỪ DATABASE
             const dbMaxPrice = res.data.max_price || 2000000000
             const dbMaxCc = res.data.max_cc || 2000
             
@@ -52,7 +52,6 @@ export default function BikeListPage() {
                 maxCc: dbMaxCc
             })
 
-            // Nếu chưa lọc giá, tự động set thanh kéo max theo giá xe cao nhất
             if (!searchParams.get('max_price')) {
                 setPriceRange([0, dbMaxPrice])
             } else {
@@ -108,7 +107,6 @@ export default function BikeListPage() {
       if (priceRange[0] > 0) params.append('min_price', priceRange[0])
       
       // ✅ CHỈ GỬI MAX_PRICE NẾU ĐANG KÉO THẤP HƠN MỨC CAO NHẤT
-      // Giúp hiển thị luôn các xe mới thêm có giá cao hơn mức cũ
       if (priceRange[1] < dynamicLimits.maxPrice) {
           params.append('max_price', priceRange[1])
       }
@@ -163,6 +161,30 @@ export default function BikeListPage() {
 
   const formatPriceFull = (price) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price)
 
+  // ✅ COMPONENT GIÁ THỰC TẾ - Backend đã tính sẵn, frontend chỉ hiển thị
+  const PriceDisplay = ({ bike }) => {
+    if (bike.is_flash_sale) {
+      return (
+        <div className="flex items-end gap-2">
+          <div>
+            <div className="text-[10px] text-red-400 font-bold uppercase tracking-wider animate-pulse">⚡ Flash Sale</div>
+            <span className="text-xl font-black text-red-400 leading-none">{formatPriceFull(bike.current_price)}</span>
+          </div>
+          <span className="text-xs text-gray-500 line-through font-bold mb-0.5">{formatPriceFull(bike.price)}</span>
+        </div>
+      )
+    }
+    if (bike.is_sale_active) {
+      return (
+        <div className="flex items-end gap-2">
+          <span className="text-xl font-black text-red-500 leading-none">{formatPriceFull(bike.current_price)}</span>
+          <span className="text-xs text-gray-500 line-through font-bold mb-0.5">{formatPriceFull(bike.price)}</span>
+        </div>
+      )
+    }
+    return <span className="text-xl font-black text-white">{formatPriceFull(bike.current_price)}</span>
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-white py-8 px-4 font-sans">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -188,9 +210,14 @@ export default function BikeListPage() {
                     <Link to={`/bikes/${bike.id}`} key={bike.id} className="group bg-slate-800 rounded-2xl overflow-hidden shadow-lg border border-slate-700 hover:border-green-500 hover:shadow-green-500/20 flex flex-col transition-all duration-300 hover:-translate-y-1">
                         <div className="relative h-48 overflow-hidden bg-slate-900">
                             <img src={bike.image_url} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" alt={bike.name}/>
-                             {bike.is_flash_sale && (
-                                <div className="absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded animate-pulse shadow-lg">FLASH SALE</div>
-                            )}
+
+                            {/* ✅ Badge dùng is_flash_sale & is_sale_active thực tế từ backend */}
+                            {bike.is_flash_sale ? (
+                                <div className="absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded animate-pulse shadow-lg">⚡ FLASH SALE</div>
+                            ) : bike.is_sale_active ? (
+                                <div className="absolute top-2 left-2 bg-orange-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg">SALE</div>
+                            ) : null}
+
                             <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-1 rounded uppercase border border-white/10">
                                 {bike.type}
                             </div>
@@ -205,14 +232,8 @@ export default function BikeListPage() {
                              </div>
                              
                              <div className="mt-auto pt-4 border-t border-slate-700/50">
-                                 {bike.discount_price ? (
-                                     <div className="flex items-end gap-2">
-                                         <span className="text-xl font-black text-red-500 leading-none">{formatPriceFull(bike.discount_price)}</span>
-                                         <span className="text-xs text-gray-500 line-through font-bold mb-0.5">{formatPriceFull(bike.price)}</span>
-                                     </div>
-                                 ) : (
-                                     <span className="text-xl font-black text-white">{formatPriceFull(bike.price)}</span>
-                                 )}
+                                 {/* ✅ Dùng PriceDisplay thay vì tự tính */}
+                                 <PriceDisplay bike={bike} />
                              </div>
                         </div>
                     </Link>
@@ -265,7 +286,6 @@ export default function BikeListPage() {
                        <Slider 
                             range 
                             min={0} 
-                            // ✅ MAX SẼ TỰ NHẢY THEO XE ĐẮT NHẤT
                             max={dynamicLimits.maxPrice} 
                             step={10000000} 
                             value={priceRange}

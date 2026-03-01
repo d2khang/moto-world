@@ -76,6 +76,28 @@ function HomePage() {
   const prevSlide = () => setCurrentSlide((prev) => (prev - 1 + HERO_SLIDES.length) % HERO_SLIDES.length);
   const nextSlide = () => setCurrentSlide((prev) => (prev + 1) % HERO_SLIDES.length);
 
+  // ✅ COMPONENT GIÁ THỰC TẾ - Backend đã tính sẵn, frontend chỉ hiển thị
+  const PriceDisplay = ({ bike }) => {
+    if (bike.is_flash_sale) {
+      return (
+        <div>
+          <div className="text-[10px] text-red-400 font-bold animate-pulse">⚡ FLASH SALE</div>
+          <div className="text-xl font-black text-red-400">{formatPrice(bike.current_price)}</div>
+          <div className="text-xs text-gray-500 line-through font-bold">{formatPrice(bike.price)}</div>
+        </div>
+      );
+    }
+    if (bike.is_sale_active) {
+      return (
+        <div>
+          <div className="text-xs text-gray-500 line-through font-bold">{formatPrice(bike.price)}</div>
+          <div className="text-xl font-black text-red-500">{formatPrice(bike.current_price)}</div>
+        </div>
+      );
+    }
+    return <div className="text-xl font-black text-green-400">{formatPrice(bike.current_price)}</div>;
+  };
+
   return (
     <div className="bg-slate-900 min-h-screen text-white">
 
@@ -196,8 +218,11 @@ function HomePage() {
                     alt={bike.name}
                     className="w-full h-full object-cover group-hover:scale-110 transition duration-500"
                   />
-                  {bike.discount_price ? (
-                    <div className="absolute top-2 left-2 bg-red-600 text-[10px] font-bold px-2 py-1 rounded text-white shadow animate-pulse">SALE</div>
+                  {/* ✅ Badge dùng is_flash_sale & is_sale_active thực tế từ backend */}
+                  {bike.is_flash_sale ? (
+                    <div className="absolute top-2 left-2 bg-red-600 text-[10px] font-bold px-2 py-1 rounded text-white shadow animate-pulse">⚡ FLASH SALE</div>
+                  ) : bike.is_sale_active ? (
+                    <div className="absolute top-2 left-2 bg-orange-500 text-[10px] font-bold px-2 py-1 rounded text-white shadow">SALE</div>
                   ) : (
                     <div className="absolute top-2 left-2 bg-blue-600 text-[10px] font-bold px-2 py-1 rounded text-white shadow">NEW</div>
                   )}
@@ -210,14 +235,8 @@ function HomePage() {
                     <span>{bike.type}</span>
                   </div>
                   <div className="mt-auto">
-                    {bike.discount_price ? (
-                      <div>
-                        <div className="text-xs text-gray-500 line-through font-bold">{formatPrice(bike.price)}</div>
-                        <div className="text-xl font-black text-red-500">{formatPrice(bike.discount_price)}</div>
-                      </div>
-                    ) : (
-                      <div className="text-xl font-black text-green-400">{formatPrice(bike.price)}</div>
-                    )}
+                    {/* ✅ Dùng PriceDisplay thay vì tự tính */}
+                    <PriceDisplay bike={bike} />
                   </div>
                 </div>
               </Link>
