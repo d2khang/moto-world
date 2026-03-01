@@ -15,7 +15,7 @@ from src.auth.dependencies import get_current_user
 
 # --- IMPORT LOG & NOTIFICATION ---
 from src.logs.router import create_log 
-from src.notifications.models import Notification # <--- MỚI: Import model thông báo
+from src.notifications.models import Notification
 
 router = APIRouter()
 
@@ -32,22 +32,61 @@ async def create_order(
     final_price = order_in.total_amount 
 
     for item in order_in.items:
+        # Lấy thông tin xe
         stmt = select(bike_models.Bike).where(bike_models.Bike.id == item.product_id)
         result = await db.execute(stmt)
         bike = result.scalar_one_or_none()
 
         if not bike:
             raise HTTPException(status_code=404, detail=f"Xe {item.product_name} không tồn tại!")
-        
-        if bike.quantity < item.quantity:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Xe '{bike.name}' chỉ còn lại {bike.quantity} chiếc. Bạn không thể mua {item.quantity} chiếc."
+
+        if item.variant_name:
+            stmt_variant = select(bike_models.BikeVariant).where(
+                bike_models.BikeVariant.bike_id == item.product_id,
+                bike_models.BikeVariant.name == item.variant_name
             )
-        
-        # Trừ kho
-        bike.quantity -= item.quantity
-        db.add(bike)
+            result_variant = await db.execute(stmt_variant)
+            variant = result_variant.scalar_one_or_none()
+
+            if not variant:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Phiên bản '{item.variant_name}' của xe '{bike.name}' không tồn tại!"
+                )
+
+            if variant.quantity < item.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Phiên bản '{variant.name}' của xe '{bike.name}' chỉ còn {variant.quantity} chiếc. Bạn không thể mua {item.quantity} chiếc."
+                )
+
+            variant.quantity -= item.quantity
+            db.add(variant)
+
+        else:
+            # Không có variant_name → kiểm tra tổng kho
+            stmt_variants = select(bike_models.BikeVariant).where(
+                bike_models.BikeVariant.bike_id == item.product_id
+            )
+            result_variants = await db.execute(stmt_variants)
+            variants = result_variants.scalars().all()
+
+            total_qty = sum(v.quantity for v in variants)
+
+            if total_qty < item.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Xe '{bike.name}' chỉ còn {total_qty} chiếc. Bạn không thể mua {item.quantity} chiếc."
+                )
+
+            remaining = item.quantity
+            for v in variants:
+                if remaining <= 0:
+                    break
+                deduct = min(v.quantity, remaining)
+                v.quantity -= deduct
+                remaining -= deduct
+                db.add(v)
 
     # --- BƯỚC 2: XỬ LÝ MÃ GIẢM GIÁ ---
     if order_in.coupon_code:
@@ -75,13 +114,29 @@ async def create_order(
         else:
             raise HTTPException(status_code=404, detail="Mã giảm giá không tồn tại.")
 
-    # --- BƯỚC 3: TẠO ĐƠN HÀNG ---
+    # --- BƯỚC 3: TẠO ĐƠN HÀNG (QUAN TRỌNG: XỬ LÝ ĐỊA CHỈ) ---
+    
+    # Logic fallback: Nếu thiếu địa chỉ chi tiết, dùng customer_address điền tạm
+    full_address = order_in.customer_address or ""
+    
+    prov = order_in.province or "Đang cập nhật"
+    dist = order_in.district or "Đang cập nhật"
+    ward = order_in.ward or "Đang cập nhật"
+    # address_detail ưu tiên lấy chi tiết, nếu ko có thì lấy full_address
+    addr_detail = order_in.address_detail or full_address or "Đang cập nhật"
+
     new_order = models.Order(
         user_id=current_user.id,
         customer_name=order_in.customer_name,
         customer_phone=order_in.customer_phone,
         customer_email=order_in.customer_email,
-        customer_address=order_in.customer_address,
+        
+        # ✅ Map dữ liệu đã xử lý vào Model
+        province=prov,
+        district=dist,
+        ward=ward,
+        address_detail=addr_detail,
+        
         payment_method=order_in.payment_method,
         total_price=final_price, 
         note=order_in.note,
@@ -89,7 +144,7 @@ async def create_order(
     )
     
     db.add(new_order)
-    await db.flush() # Để lấy ID đơn hàng
+    await db.flush()
 
     # --- BƯỚC 4: LƯU CHI TIẾT ---
     for item in order_in.items:
@@ -113,7 +168,7 @@ async def create_order(
         status="success"
     )
 
-    # 🔔 TẠO THÔNG BÁO (NOTIFICATION) - MỚI
+    # 🔔 TẠO THÔNG BÁO (NOTIFICATION)
     # 1. Thông báo cho KHÁCH HÀNG
     notif_customer = Notification(
         user_id=current_user.id, 
@@ -124,7 +179,7 @@ async def create_order(
 
     # 2. Thông báo cho ADMIN/STAFF
     notif_admin = Notification(
-        user_id=None, # Gửi chung cho hệ thống
+        user_id=None,
         title="📦 Có đơn hàng mới!",
         message=f"Khách hàng {current_user.username} vừa đặt đơn #{new_order.id}. Kiểm tra ngay!"
     )
@@ -133,6 +188,7 @@ async def create_order(
     await db.commit()
     await db.refresh(new_order)
 
+    # Query lại để trả về response đầy đủ (kèm items)
     stmt = (
         select(models.Order)
         .options(selectinload(models.Order.items))
@@ -197,10 +253,10 @@ async def update_order_status(
     if not order:
         raise HTTPException(status_code=404, detail="Đơn hàng không tồn tại")
     
-    old_status = order.status # Lưu lại trạng thái cũ
+    old_status = order.status
     order.status = status_update.status
 
-    # 🟢 GHI LOG: Cập nhật trạng thái
+    # 🟢 GHI LOG
     log_status = "success" if order.status == "completed" else "warning"
     if order.status == "cancelled": log_status = "error"
 
@@ -212,7 +268,7 @@ async def update_order_status(
         status=log_status
     )
 
-    # 🔔 TẠO THÔNG BÁO CHO KHÁCH: TRẠNG THÁI ĐƠN HÀNG THAY ĐỔI
+    # 🔔 THÔNG BÁO CHO KHÁCH
     notif_update = Notification(
         user_id=order.user_id,
         title="Cập nhật đơn hàng 🚚",

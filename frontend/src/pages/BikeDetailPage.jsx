@@ -9,12 +9,6 @@ import { useCart } from '../context/CartContext'
 import { useCompare } from '../context/CompareContext' 
 import toast from 'react-hot-toast'
 
-/**
- * File: BikeDetailPage.jsx
- * Chức năng: Hiển thị chi tiết xe.
- * CẬP NHẬT: Logic lọc ảnh biến thể triệt để (chỉ hiện ảnh của màu đang chọn).
- */
-
 function BikeDetailPage() {
   const { id } = useParams() 
   const navigate = useNavigate()
@@ -31,23 +25,29 @@ function BikeDetailPage() {
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin' || user.role === 'staff'
 
+  // ✅ HELPER: Định dạng URL ảnh chuẩn
+  const formatUrl = (url) => {
+    if (!url) return "https://via.placeholder.com/600x400?text=No+Image";
+    if (url.startsWith('http')) return url;
+    return `http://localhost:8000/${url}`; 
+  }
+
   // 1. FETCH DỮ LIỆU
   useEffect(() => {
     const fetchBikeDetail = async () => {
       try {
         const res = await axios.get(`http://localhost:8000/api/bikes/${id}`)
-        setBike(res.data)
+        const data = res.data
+        setBike(data)
         
-        // Mặc định chọn biến thể đầu tiên
-        if (res.data.variants && res.data.variants.length > 0) {
-            setSelectedVariant(res.data.variants[0])
+        // Chọn biến thể đầu tiên và gán ảnh đại diện ban đầu
+        if (data.variants && data.variants.length > 0) {
+            setSelectedVariant(data.variants[0])
+            setActiveImage(formatUrl(data.variants[0].image_url || data.image_url))
+        } else {
+            setActiveImage(formatUrl(data.image_url))
         }
-
-        // Mặc định hiển thị ảnh đại diện xe
-        setActiveImage(res.data.image_url)
-
       } catch (error) {
-        console.error("Lỗi:", error)
         toast.error("Không thể tải thông tin xe")
       } finally {
         setLoading(false)
@@ -56,7 +56,7 @@ function BikeDetailPage() {
     fetchBikeDetail()
   }, [id])
 
-  // 2. LOGIC ĐẾM NGƯỢC FLASH SALE
+  // 2. LOGIC ĐẾM NGƯỢC
   useEffect(() => {
     if (!bike) return;
     const endDate = bike.is_flash_sale ? bike.flash_sale_end : bike.discount_end_date;
@@ -81,25 +81,18 @@ function BikeDetailPage() {
     return () => clearInterval(timer);
   }, [bike]);
 
-  // 3. TỰ ĐỘNG ĐỔI ẢNH LỚN KHI CHỌN MÀU
+  // 3. ĐỔI ẢNH KHI CHỌN BIẾN THỂ
   useEffect(() => {
       if (selectedVariant) {
-          // Ưu tiên 1: Ảnh đầu tiên trong gallery riêng của biến thể
-          if (selectedVariant.images && selectedVariant.images.length > 0) {
-              setActiveImage(selectedVariant.images[0].image_url)
-          } 
-          // Ưu tiên 2: Ảnh đại diện của biến thể
-          else if (selectedVariant.image_url) {
-              setActiveImage(selectedVariant.image_url)
-          }
+          setActiveImage(formatUrl(selectedVariant.image_url || bike?.image_url))
       }
   }, [selectedVariant])
 
   const handleAddToCart = () => {
-      const qty = selectedVariant ? selectedVariant.quantity : bike.quantity;
+      const qty = selectedVariant ? selectedVariant.quantity : bike.total_quantity;
       if (qty <= 0) return toast.error("Sản phẩm tạm hết hàng!");
       addToCart(bike, selectedVariant);
-      toast.success(`Đã thêm "${bike.name}" vào giỏ!`);
+      toast.success(`Đã thêm vào giỏ hàng!`);
   }
 
   const handleDelete = async () => {
@@ -110,7 +103,7 @@ function BikeDetailPage() {
           headers: { Authorization: `Bearer ${token}` }
         })
         toast.success("Đã xóa sản phẩm")
-        navigate('/admin/bikes') 
+        navigate('/bikes') 
       } catch (error) {
         toast.error("Lỗi khi xóa")
       }
@@ -122,86 +115,61 @@ function BikeDetailPage() {
   // --- RENDER GIÁ ---
   const renderPriceSection = () => {
     const originalPrice = selectedVariant ? selectedVariant.price : bike.price
-    let finalPrice = originalPrice
-    let isSale = false
-    let tagLabel = ""
+    let finalPrice = bike.current_price || originalPrice
+    let isSale = finalPrice < originalPrice
 
-    if (bike.is_flash_sale && timeLeft !== "EXPIRED") {
-        finalPrice = bike.flash_sale_price || originalPrice
-        isSale = true
-        tagLabel = "🔥 FLASH SALE"
-    } else if (bike.discount_price && bike.discount_price < originalPrice && timeLeft !== "EXPIRED") {
-        finalPrice = bike.discount_price
-        isSale = true
-        tagLabel = "⚡ KHUYẾN MÃI"
-    }
-
-    if (isSale) {
+    if (isSale && timeLeft !== "EXPIRED") {
         const percent = Math.round(((originalPrice - finalPrice) / originalPrice) * 100);
         return (
-            <div className="mb-6 font-mono bg-slate-800/50 p-4 rounded-xl border border-red-500/30">
+            <div className="mb-6 font-mono bg-slate-800/50 p-5 rounded-2xl border border-red-500/30">
                 {timeLeft && (
-                    <div className="inline-flex items-center gap-2 text-red-400 mb-2 text-sm font-bold animate-pulse">
+                    <div className="inline-flex items-center gap-2 text-red-400 mb-3 text-sm font-bold bg-red-500/10 px-3 py-1 rounded-full animate-pulse">
                         <Clock size={16} /> <span>Kết thúc sau: {timeLeft}</span>
                     </div>
                 )}
-                <div className="flex items-end gap-3">
-                    <span className="text-4xl font-black text-red-500 tracking-tight">
-                        {formatPrice(finalPrice)}
-                    </span>
-                    <span className="text-lg text-gray-500 line-through font-bold mb-1">
-                        {formatPrice(originalPrice)}
-                    </span>
-                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded mb-2">
-                        -{percent}%
-                    </span>
+                <div className="flex items-end gap-4">
+                    <span className="text-5xl font-black text-red-500 tracking-tighter">{formatPrice(finalPrice)}</span>
+                    <div className="flex flex-col mb-1">
+                        <span className="bg-red-500 text-white text-[10px] font-black px-2 py-0.5 rounded-md mb-1 w-fit">-{percent}%</span>
+                        <span className="text-lg text-gray-500 line-through font-bold">{formatPrice(originalPrice)}</span>
+                    </div>
                 </div>
-                <p className="text-xs text-red-400 mt-1 font-bold uppercase">{tagLabel}</p>
+                <p className="text-xs text-red-400 mt-2 font-black uppercase tracking-widest">{bike.is_flash_sale ? "🔥 FLASH SALE" : "⚡ KHUYẾN MÃI"}</p>
             </div>
         )
     }
-    return (
-        <div className="text-4xl font-black text-green-500 mb-8 font-mono tracking-tight">
-            {formatPrice(finalPrice)}
-        </div>
-    )
+    return <div className="text-5xl font-black text-green-500 mb-8 font-mono tracking-tighter">{formatPrice(finalPrice)}</div>
   }
 
   // --- RENDER SPECS ---
   const renderSpecs = () => {
-     if (!bike.specs) {
-         return <p className="text-gray-500 italic text-center py-8">Chưa có thông số kỹ thuật chi tiết.</p>
-     }
+     if (!bike.specs) return <p className="text-gray-500 italic text-center py-10">Thông số kỹ thuật đang cập nhật...</p>
      const s = bike.specs
      return (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-            <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
-                <h4 className="text-blue-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
-                    <Zap size={18}/> Hiệu Năng
-                </h4>
-                <ul className="space-y-3 text-sm">
-                    <SpecItem label="Động cơ" value={s.engine_type} />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
+            <div className="bg-slate-800/80 p-6 rounded-3xl border border-slate-700 shadow-xl">
+                <h4 className="text-blue-400 font-black mb-5 uppercase text-xs tracking-widest flex items-center gap-2 border-b border-slate-700 pb-3"><Zap size={18}/> Hiệu Năng</h4>
+                <ul className="space-y-4 text-sm">
+                    <SpecItem label="Loại động cơ" value={s.engine_type} />
+                    <SpecItem label="Dung tích" value={bike.engine_cc ? `${bike.engine_cc} cc` : null} />
                     <SpecItem label="Hộp số" value={s.transmission} />
                     <SpecItem label="Công suất" value={s.power_hp ? `${s.power_hp} HP` : null} highlight />
                     <SpecItem label="Mô-men xoắn" value={s.torque_nm ? `${s.torque_nm} Nm` : null} />
-                    <SpecItem label="Tốc độ tối đa" value={s.top_speed_kmh ? `${s.top_speed_kmh} km/h` : null} />
                 </ul>
             </div>
-            <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
-                <h4 className="text-orange-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
-                    <Ruler size={18}/> Kích Thước
-                </h4>
-                <ul className="space-y-3 text-sm">
+            <div className="bg-slate-800/80 p-6 rounded-3xl border border-slate-700 shadow-xl">
+                <h4 className="text-orange-400 font-black mb-5 uppercase text-xs tracking-widest flex items-center gap-2 border-b border-slate-700 pb-3"><Ruler size={18}/> Kích Thước</h4>
+                <ul className="space-y-4 text-sm">
                     <SpecItem label="Chiều cao yên" value={s.seat_height_mm ? `${s.seat_height_mm} mm` : null} />
-                    <SpecItem label="Trọng lượng ướt" value={s.weight_kg ? `${s.weight_kg} kg` : null} />
-                    <SpecItem label="Dung tích bình xăng" value={s.fuel_capacity_l ? `${s.fuel_capacity_l} L` : null} />
+                    <SpecItem label="Trọng lượng" value={s.weight_kg ? `${s.weight_kg} kg` : null} />
+                    <SpecItem label="Bình xăng" value={s.fuel_capacity_l ? `${s.fuel_capacity_l} L` : null} />
+                    <SpecItem label="Phanh trước" value={s.front_brake} />
+                    <SpecItem label="Phanh sau" value={s.rear_brake} />
                 </ul>
             </div>
-            <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700">
-                 <h4 className="text-green-400 font-bold mb-4 uppercase text-sm flex items-center gap-2 border-b border-slate-700 pb-2">
-                    <Info size={18}/> Thông Tin Khác
-                </h4>
-                <div className="text-gray-400 text-sm leading-relaxed whitespace-pre-line">
+            <div className="bg-slate-800/80 p-6 rounded-3xl border border-slate-700 shadow-xl">
+                 <h4 className="text-green-400 font-black mb-5 uppercase text-xs tracking-widest flex items-center gap-2 border-b border-slate-700 pb-3"><Info size={18}/> Giới Thiệu</h4>
+                <div className="text-gray-400 text-sm leading-relaxed whitespace-pre-line max-h-60 overflow-y-auto custom-scrollbar">
                     {bike.description || "Đang cập nhật mô tả..."}
                 </div>
             </div>
@@ -212,72 +180,56 @@ function BikeDetailPage() {
   const SpecItem = ({ label, value, highlight }) => {
       if (!value) return null
       return (
-        <li className="flex justify-between items-center">
-            <span className="text-gray-400">{label}</span>
+        <li className="flex justify-between items-center group">
+            <span className="text-gray-500 group-hover:text-gray-300 transition-colors">{label}</span>
             <span className={`font-bold ${highlight ? 'text-yellow-400' : 'text-slate-200'}`}>{value}</span>
         </li>
       )
   }
 
-  if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center font-bold">LOADING...</div>
-  if (!bike) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">Sản phẩm không tồn tại</div>
+  if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center font-black uppercase tracking-widest">Đang tải...</div>
 
-  const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.quantity;
+  // ============================================================
+  // LOGIC GALLERY: CHỈ LẤY TRONG MẢNG IMAGES (KHÔNG GỘP ẢNH ĐẠI DIỆN)
+  // ============================================================
+  let thumbnails = []
+  if (selectedVariant && selectedVariant.images && selectedVariant.images.length > 0) {
+      // ✅ Nếu có biến thể: Chỉ lấy gallery của biến thể đó
+      thumbnails = selectedVariant.images.map(img => formatUrl(img.image_url))
+  } else {
+      // ✅ Nếu không: Lấy gallery chung của xe (Mảng images từ Backend)
+      thumbnails = (bike.images || []).map(i => formatUrl(i.image_url))
+  }
+
+  const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.total_quantity;
   const isOutOfStock = (currentQuantity || 0) <= 0;
 
-  // ============================================================
-  // LOGIC LỌC ẢNH ĐỘC QUYỀN (CHỈ HIỆN ẢNH CỦA BIẾN THỂ ĐÓ)
-  // ============================================================
-  
-  let displayImages = []
-  
-  if (selectedVariant) {
-      // 1. Nếu biến thể có Album ảnh riêng, lấy hết
-      if (selectedVariant.images && selectedVariant.images.length > 0) {
-          displayImages = selectedVariant.images.map(img => img.image_url)
-      } 
-      // 2. Nếu không có album riêng, lấy ảnh đại diện của biến thể
-      else if (selectedVariant.image_url) {
-          displayImages.push(selectedVariant.image_url)
-      }
-  }
-
-  // 3. Nếu chưa chọn biến thể nào hoặc biến thể không có ảnh -> Dùng ảnh chung của xe
-  if (displayImages.length === 0) {
-      if (bike.image_url) displayImages.push(bike.image_url)
-      if (bike.images) displayImages = [...displayImages, ...bike.images.map(i => i.image_url)]
-  }
-
-  // 4. Lọc trùng lặp
-  const allImages = displayImages.filter((url, index, self) => url && self.indexOf(url) === index)
-
   return (
-    <div className="bg-slate-900 min-h-screen text-white pb-20 pt-20">
-      <div className="max-w-7xl mx-auto px-4 mb-6">
-        <Link to="/bikes" className="inline-flex items-center text-slate-400 hover:text-white transition group">
-          <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition" /> Danh sách sản phẩm
+    <div className="bg-slate-900 min-h-screen text-white pb-20 pt-24">
+      <div className="max-w-7xl mx-auto px-4 mb-8">
+        <Link to="/bikes" className="inline-flex items-center text-slate-500 hover:text-white transition-all font-bold uppercase text-xs tracking-widest">
+          <ArrowLeft className="w-4 h-4 mr-2" /> Quay lại danh sách
         </Link>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12">
-        {/* CỘT TRÁI: GALLERY ẢNH */}
-        <div className="space-y-4">
-          {/* ẢNH LỚN ACTIVE */}
-          <div className="bg-slate-800 rounded-2xl overflow-hidden border border-slate-700 relative aspect-[4/3] group">
-            <img src={activeImage || "https://via.placeholder.com/600x400?text=No+Image"} alt={bike.name} className="w-full h-full object-contain bg-black/20" />
+      <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16">
+        {/* CỘT TRÁI: GALLERY */}
+        <div className="space-y-6">
+          <div className="bg-white rounded-[2.5rem] overflow-hidden border border-slate-700 relative aspect-[4/3] shadow-2xl">
+            <img src={activeImage} alt={bike.name} className="absolute inset-0 w-full h-full object-contain p-8" />
              {isOutOfStock && (
-                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
-                    <span className="bg-red-600 text-white px-6 py-2 text-xl font-bold uppercase -rotate-12 border-4 border-white">Hết Hàng</span>
+                 <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10 backdrop-blur-sm">
+                    <span className="bg-red-600 text-white px-8 py-3 text-2xl font-black uppercase -rotate-12 border-4 border-white shadow-2xl">HẾT HÀNG</span>
                  </div>
              )}
           </div>
 
-          {/* LIST THUMBNAILS (Chỉ hiện ảnh của màu đang chọn) */}
-          {allImages.length > 1 && (
-            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-700">
-               {allImages.map((img, idx) => (
-                  <button key={idx} onClick={() => setActiveImage(img)} className={`w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${activeImage === img ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-slate-700 opacity-60 hover:opacity-100'}`}>
-                     <img src={img} className="w-full h-full object-cover" />
+          {/* LIST THUMBNAILS (Chỉ lấy từ images gallery) */}
+          {thumbnails.length > 0 && (
+            <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
+               {thumbnails.map((img, idx) => (
+                  <button key={idx} onClick={() => setActiveImage(img)} className={`w-24 h-20 flex-shrink-0 rounded-2xl overflow-hidden border-2 bg-white p-1 transition-all ${activeImage === img ? 'border-blue-500 scale-105 shadow-lg shadow-blue-500/20' : 'border-slate-800 opacity-40 hover:opacity-100'}`}>
+                     <img src={img} className="w-full h-full object-contain" />
                   </button>
                ))}
             </div>
@@ -285,70 +237,74 @@ function BikeDetailPage() {
         </div>
 
         {/* CỘT PHẢI: THÔNG TIN */}
-        <div>
-           <div className="mb-2">
-              <span className="text-blue-400 text-sm font-bold uppercase tracking-wider">{bike.make?.name || bike.brand}</span>
-              <h1 className="text-4xl md:text-5xl font-black text-white uppercase mt-1 mb-2 leading-tight">{bike.name}</h1>
-              <div className="flex items-center gap-4 text-sm text-gray-400">
-                  <span className="flex items-center gap-1"><Gauge size={16}/> {bike.engine_cc}cc</span>
-                  <span className="flex items-center gap-1 bg-slate-800 px-2 py-0.5 rounded">{bike.type}</span>
-                  <span className="flex items-center gap-1 text-yellow-500"><Star size={16} fill="currentColor"/> 5.0</span>
+        <div className="flex flex-col">
+           <div className="mb-4">
+              <span className="text-blue-500 text-sm font-black uppercase tracking-widest">{bike.make?.name || bike.brand}</span>
+              <h1 className="text-5xl md:text-6xl font-black text-white uppercase mt-2 mb-4 leading-none tracking-tighter">{bike.name}</h1>
+              <div className="flex items-center gap-6 text-sm text-gray-400 font-bold">
+                  <span className="flex items-center gap-2 bg-slate-800 px-4 py-1.5 rounded-full border border-slate-700"><Gauge size={16}/> {bike.engine_cc} CC</span>
+                  <span className="flex items-center gap-2 bg-slate-800 px-4 py-1.5 rounded-full border border-slate-700 uppercase"><Tag size={16}/> {bike.type}</span>
+                  <span className="flex items-center gap-2 text-yellow-500"><Star size={18} fill="currentColor"/> 5.0</span>
               </div>
            </div>
 
            {isAdmin && (
-                <div className="flex gap-3 mb-6">
-                    <Link to={`/bikes/${id}/edit`} className="flex items-center gap-2 bg-yellow-500/10 text-yellow-500 px-4 py-2 rounded-lg hover:bg-yellow-500/20 transition text-sm font-bold">
+                <div className="flex gap-3 mb-8">
+                    <Link to={`/bikes/${id}/edit`} className="bg-yellow-500/10 text-yellow-500 px-5 py-2.5 rounded-xl hover:bg-yellow-500/20 transition text-xs font-black uppercase tracking-widest border border-yellow-500/20 flex items-center gap-2">
                         <Edit size={16}/> Chỉnh sửa
                     </Link>
-                    <button onClick={handleDelete} className="flex items-center gap-2 bg-red-500/10 text-red-500 px-4 py-2 rounded-lg hover:bg-red-500/20 transition text-sm font-bold">
+                    <button onClick={handleDelete} className="bg-red-500/10 text-red-500 px-5 py-2.5 rounded-xl hover:bg-red-500/20 transition text-xs font-black uppercase tracking-widest border border-red-500/20 flex items-center gap-2">
                         <Trash2 size={16}/> Xóa xe
                     </button>
                 </div>
            )}
 
-           <div className="w-full h-px bg-slate-800 my-6"></div>
+           <div className="w-full h-px bg-slate-800 mb-8"></div>
            {renderPriceSection()}
 
            {bike.variants && bike.variants.length > 0 && (
-              <div className="mb-8">
-                 <h3 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3">Lựa chọn phiên bản:</h3>
-                 <div className="flex flex-wrap gap-3">
+              <div className="mb-10">
+                 <h3 className="text-slate-500 text-xs font-black uppercase tracking-widest mb-4">Lựa chọn màu sắc</h3>
+                 <div className="flex flex-wrap gap-4">
                     {bike.variants.map((v) => (
-                       <button key={v.id} onClick={() => setSelectedVariant(v)} className={`flex items-center gap-2 px-4 py-3 rounded-xl border transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-lg shadow-blue-500/10 ring-1 ring-blue-500' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
-                          {v.image_url && <img src={v.image_url} className="w-6 h-6 rounded object-cover" />}
-                          <span className="font-bold text-sm uppercase">{v.name}</span>
+                       <button key={v.id} onClick={() => setSelectedVariant(v)} className={`flex items-center gap-3 px-5 py-4 rounded-2xl border-2 transition-all ${selectedVariant?.id === v.id ? 'bg-slate-800 border-blue-500 text-white shadow-xl ring-2 ring-blue-500/20' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-600'}`}>
+                          {v.image_url && <div className="w-8 h-8 rounded-full bg-white p-0.5 overflow-hidden border border-slate-700"><img src={formatUrl(v.image_url)} className="w-full h-full object-contain" /></div>}
+                          <span className="font-black text-xs uppercase tracking-widest">{v.name}</span>
                        </button>
                     ))}
                  </div>
               </div>
            )}
 
-           <div className="flex gap-4">
-              <button onClick={handleAddToCart} disabled={isOutOfStock} className={`flex-1 py-4 rounded-xl font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition-transform active:scale-95 ${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500 text-white'}`}>
-                 {isOutOfStock ? "Hết Hàng" : <><ShoppingCart size={20}/> Thêm Vào Giỏ</>}
+           <div className="flex gap-4 mt-auto">
+              <button onClick={handleAddToCart} disabled={isOutOfStock} className={`flex-[3] py-5 rounded-2xl font-black uppercase tracking-widest text-sm flex items-center justify-center gap-3 transition-all ${isOutOfStock ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' : 'bg-green-600 hover:bg-green-500 text-white shadow-green-900/40'}`}>
+                 {isOutOfStock ? "HẾT HÀNG" : <><ShoppingCart size={22}/> Thêm Vào Giỏ</>}
               </button>
-              <button onClick={() => { addToCompare(bike); navigate('/compare'); }} className="px-6 rounded-xl bg-slate-800 border border-slate-600 text-blue-400 hover:text-white hover:border-blue-500 transition-colors">
+              <button onClick={() => { addToCompare(bike); navigate('/compare'); }} className="flex-1 rounded-2xl bg-slate-800 border-2 border-slate-700 text-slate-400 hover:text-white hover:border-blue-500 transition-all flex items-center justify-center">
                  <Scale size={24} />
               </button>
            </div>
 
-           <div className="mt-6 grid grid-cols-2 gap-4 text-xs font-bold text-slate-500 uppercase">
-              <div className="flex items-center gap-2"><ShieldCheck size={16}/> Bảo hành chính hãng</div>
-              <div className="flex items-center gap-2"><Tag size={16}/> Giá đã bao gồm VAT</div>
+           <div className="mt-8 grid grid-cols-2 gap-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+              <div className="flex items-center gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800"><ShieldCheck size={18} className="text-blue-500"/> Bảo hành 2 năm</div>
+              <div className="flex items-center gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800"><Tag size={18} className="text-green-500"/> Hỗ trợ trả góp</div>
            </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 mt-16 border-t border-slate-800 pt-10">
-          <div className="flex items-center gap-3 mb-6">
-             <div className="p-3 bg-slate-800 rounded-xl text-blue-500"><Settings size={24}/></div>
-             <h3 className="text-2xl font-black text-white uppercase">Thông Số Kỹ Thuật Chi Tiết</h3>
+      <div className="max-w-7xl mx-auto px-4 mt-24 border-t border-slate-800 pt-16">
+          <div className="flex items-center gap-4 mb-10">
+              <div className="p-4 bg-blue-500 rounded-3xl shadow-lg shadow-blue-500/20 text-white"><Settings size={32}/></div>
+              <h3 className="text-3xl font-black text-white uppercase tracking-tighter">Thông Số Kỹ Thuật</h3>
           </div>
           {renderSpecs()}
       </div>
     </div>
   )
 }
+
+const Loader2 = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+)
 
 export default BikeDetailPage

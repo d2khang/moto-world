@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useCart } from '../context/CartContext'
 import { Link, useNavigate } from 'react-router-dom'
 import { Trash2, ArrowLeft, Plus, Minus, Banknote, Calendar, MapPin, Mail, CreditCard, Ticket, Check, X, ShieldCheck, Loader2 } from 'lucide-react'
 import axios from 'axios'
-import toast from 'react-hot-toast' // 1. Import toast
+import toast from 'react-hot-toast'
 
 const CartPage = () => {
-  const { cartItems, increaseQuantity, decreaseQuantity, removeFromCart, clearCart, totalAmount } = useCart()
+  const { cartItems, increaseQuantity, decreaseQuantity, removeFromCart, clearCart } = useCart()
   const navigate = useNavigate()
   
   const [customer, setCustomer] = useState({ name: '', phone: '', email: '', note: '' })
@@ -20,11 +20,29 @@ const CartPage = () => {
   const [couponLoading, setCouponLoading] = useState(false)
 
   const SHOWROOM_ADDRESS = "Cái Răng, Cần Thơ, Việt Nam"
+  // Format thời gian cho input datetime-local (Min là ngày mai 08:00)
   const tomorrowStr = new Date(new Date().getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0] + "T08:00";
 
-  // --- TÍNH TIỀN ---
-  const subTotal = totalAmount
+  // --- 1. HÀM LẤY GIÁ THỰC TẾ (XỬ LÝ LOGIC GIẢM GIÁ) ---
+  const getRealPrice = (item) => {
+    // Nếu backend trả về current_price (giá sau giảm) và nó nhỏ hơn giá gốc -> Dùng giá này
+    if (item.current_price && item.current_price < item.price) {
+        return item.current_price;
+    }
+    // Nếu có flash_sale_price riêng
+    if (item.flash_sale_price && item.is_flash_sale) {
+        return item.flash_sale_price;
+    }
+    // Mặc định trả về giá gốc
+    return item.price;
+  }
+
+  // --- 2. TÍNH TỔNG TIỀN DỰA TRÊN GIÁ THỰC TẾ ---
+  const subTotal = cartItems.reduce((total, item) => {
+      return total + (getRealPrice(item) * item.quantity);
+  }, 0);
   
+  // Tính tiền giảm giá từ Coupon
   const discountAmount = appliedCoupon 
     ? (appliedCoupon.discount_type === 'percent' 
         ? (subTotal * appliedCoupon.discount_value) / 100 
@@ -32,18 +50,10 @@ const CartPage = () => {
     : 0
 
   const totalAfterDiscount = subTotal - discountAmount > 0 ? subTotal - discountAmount : 0
-  const totalDeposit = totalAfterDiscount * 0.3 
+  const totalDeposit = totalAfterDiscount * 0.3 // Cọc 30%
 
-  const formatRealPrice = (price) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price)
-  
-  const formatMaskedPrice = (price) => {
-    if (price >= 1000000000) {
-        let billions = (price / 1000000000).toFixed(1)
-        if (billions.endsWith('.0')) billions = billions.slice(0, -2) 
-        return `${billions.replace('.', ',')} Tỷ XXX...`
-    }
-    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price)
-  }
+  // Hàm format tiền tệ
+  const formatMoney = (amount) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount)
 
   // --- HÀM XỬ LÝ COUPON ---
   const handleApplyCoupon = async () => {
@@ -86,11 +96,11 @@ const CartPage = () => {
       return false;
     }
     
-    // Validate ngày giờ
+    // Validate ngày giờ (Phải hẹn trước 1 ngày, trong giờ hành chính)
     const selectedDate = new Date(pickupTime);
     const selectedHour = selectedDate.getHours();
     const minDate = new Date();
-    minDate.setDate(minDate.getDate() + 1); // Phải đặt trước 1 ngày
+    minDate.setDate(minDate.getDate() + 1); 
     minDate.setHours(0, 0, 0, 0);
 
     if (selectedDate < minDate) {
@@ -104,23 +114,36 @@ const CartPage = () => {
     return true;
   }
 
-  // --- TẠO DATA ---
+  // --- TẠO DATA GỬI API ---
   const createOrderData = (method) => {
     const selectedDate = new Date(pickupTime);
+    const dateStr = selectedDate.toLocaleString('vi-VN');
+    
     return {
       customer_name: customer.name.trim(),
       customer_phone: customer.phone.trim(),
       customer_email: customer.email,
-      customer_address: `Showroom: ${SHOWROOM_ADDRESS} | Hẹn: ${selectedDate.toLocaleString('vi-VN')}`,
+      
+      // Gửi cả 4 trường địa chỉ (để trống hoặc default nếu không dùng)
+      province: "Cần Thơ", 
+      district: "Cái Răng", 
+      ward: "Hưng Phú",
+      address_detail: `Showroom: ${SHOWROOM_ADDRESS} | Hẹn: ${dateStr}`,
+
+      // Fallback cho backend cũ
+      customer_address: `Showroom: ${SHOWROOM_ADDRESS} | Hẹn: ${dateStr}`,
+      
       payment_method: method,
-      total_amount: totalAfterDiscount,
+      total_amount: totalAfterDiscount, // Tổng tiền cuối cùng
       coupon_code: appliedCoupon ? appliedCoupon.code : null, 
       note: method === 'vnpay' ? "Thanh toán Cọc Online qua VNPay" : customer.note,
+      
       items: cartItems.map(item => ({
         product_id: item.id,
         product_name: item.name,
         variant_name: item.variantName || "Tiêu chuẩn",
-        price: item.price, 
+        // ✅ QUAN TRỌNG: Gửi giá thực tế (đã giảm) lên server
+        price: getRealPrice(item), 
         quantity: item.quantity,
         image_url: item.image || item.image_url || "" 
       }))
@@ -132,7 +155,7 @@ const CartPage = () => {
     e.preventDefault()
     const token = localStorage.getItem('token')
     if (!token) { 
-        toast.error("Phiên làm việc hết hạn. Vui lòng đăng nhập lại.")
+        toast.error("Vui lòng đăng nhập để tiếp tục.")
         navigate('/login')
         return 
     }
@@ -140,18 +163,18 @@ const CartPage = () => {
 
     setLoading(true)
     const orderData = createOrderData('cash'); 
-    const toastId = toast.loading("Đang xử lý đơn hàng...")
+    const toastId = toast.loading("Đang tạo lịch hẹn...")
 
     try {
       await axios.post('http://localhost:8000/api/orders/', orderData, {
         headers: { Authorization: `Bearer ${token}` }
       })
       
-      toast.success("Đặt lịch thành công! Vui lòng đến Showroom đúng hẹn.", { id: toastId, duration: 5000 })
+      toast.success("Đặt lịch thành công!", { id: toastId })
       clearCart()
       navigate('/')
     } catch (error) {
-      const msg = error.response?.status === 401 ? "Lỗi xác thực." : "Lỗi hệ thống: " + (error.response?.data?.detail || error.message);
+      const msg = error.response?.data?.detail || "Lỗi hệ thống"
       toast.error(msg, { id: toastId });
     } finally {
       setLoading(false)
@@ -163,36 +186,36 @@ const CartPage = () => {
     e.preventDefault();
     const token = localStorage.getItem('token');
     if (!token) { 
-        toast.error("Vui lòng đăng nhập để thanh toán!")
+        toast.error("Vui lòng đăng nhập!")
         navigate('/login')
         return
     }
     if (!validateForm()) return;
 
     setLoading(true);
-    const toastId = toast.loading("Đang tạo cổng thanh toán...")
+    const toastId = toast.loading("Đang kết nối VNPay...")
 
     try {
+        // 1. Tạo đơn hàng trước
         const orderData = createOrderData('vnpay');
         const resOrder = await axios.post('http://localhost:8000/api/orders/', orderData, {
             headers: { Authorization: `Bearer ${token}` }
         });
         const newOrderId = resOrder.data.id;
         
+        // 2. Lấy link thanh toán cho số tiền CỌC
         const amountToPay = Math.round(totalDeposit); 
-        
         const resPayment = await axios.post(
             `http://localhost:8000/api/payment/create-url?order_id=${newOrderId}&amount=${amountToPay}`, 
             {}, 
             { headers: { Authorization: `Bearer ${token}` } }
         );
         
-        toast.success("Đang chuyển hướng sang VNPay...", { id: toastId })
         window.location.href = resPayment.data.payment_url;
     } catch (err) {
         console.error(err);
-        const msg = err.response?.data?.detail || err.message
-        toast.error(`Lỗi thanh toán: ${msg}`, { id: toastId });
+        const msg = err.response?.data?.detail || "Lỗi thanh toán"
+        toast.error(msg, { id: toastId });
         setLoading(false);
     }
   };
@@ -208,52 +231,82 @@ const CartPage = () => {
     <div className="min-h-screen bg-slate-900 text-white py-10 px-4 font-sans">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* CỘT TRÁI: DANH SÁCH SẢN PHẨM */}
+        {/* === CỘT TRÁI: DANH SÁCH SẢN PHẨM === */}
         <div className="lg:col-span-7">
           <h1 className="text-3xl font-black mb-8 flex items-center gap-2 uppercase tracking-tighter">
             <Link to="/"><ArrowLeft className="text-gray-500 hover:text-white transition" /></Link> Giỏ Hàng
           </h1>
           <div className="space-y-4">
-            {cartItems.map((item) => (
-              <div key={`${item.id}-${item.variantId}`} className="bg-slate-800 p-5 rounded-2xl flex gap-4 border border-slate-700 shadow-xl">
-                <img src={item.image} alt={item.name} className="w-24 h-24 object-cover rounded-xl border border-slate-600" />
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold uppercase">{item.name}</h3>
-                  <p className="text-gray-400 text-xs mb-2 italic">Phiên bản: {item.variantName || "Mặc định"}</p>
-                  <div className="text-green-400 font-mono font-bold">{formatMaskedPrice(item.price)}</div>
-                </div>
-                <div className="flex flex-col items-end justify-between">
-                    <button onClick={() => removeFromCart(item.id, item.variantId)} className="text-gray-500 hover:text-red-500 transition"><Trash2 className="w-5 h-5" /></button>
-                    <div className="flex items-center gap-2 bg-slate-900 rounded-lg p-1 border border-slate-700">
-                      <button onClick={() => decreaseQuantity(item.id, item.variantId)} className="p-1 hover:bg-slate-700 rounded"><Minus className="w-4 h-4" /></button>
-                      <span className="font-bold w-6 text-center text-sm">{item.quantity}</span>
-                      <button onClick={() => increaseQuantity(item.id, item.variantId)} className="p-1 hover:bg-slate-700 rounded"><Plus className="w-4 h-4" /></button>
+            {cartItems.map((item) => {
+              const realPrice = getRealPrice(item); // Lấy giá thực tế để hiển thị
+              const isSale = realPrice < item.price; // Check xem có đang sale không
+
+              return (
+                <div key={`${item.id}-${item.variantId}`} className="bg-slate-800 p-4 rounded-2xl flex gap-4 border border-slate-700 shadow-xl items-center relative overflow-hidden group">
+                    
+                    {/* --- ✅ FIX LỖI HÌNH ẢNH: Container chữ nhật + object-contain --- */}
+                    <div className="w-32 h-24 flex-shrink-0 bg-white rounded-xl border border-slate-600 overflow-hidden relative">
+                        <img 
+                            src={item.image || item.image_url} 
+                            alt={item.name} 
+                            className="absolute inset-0 w-full h-full object-contain p-2 hover:scale-110 transition-transform duration-500" 
+                        />
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                        <h3 className="text-lg font-bold uppercase truncate">{item.name}</h3>
+                        <p className="text-gray-400 text-xs mb-2 italic">Phiên bản: {item.variantName || "Tiêu chuẩn"}</p>
+                        
+                        {/* --- ✅ FIX LỖI GIÁ: Hiển thị giá Sale và Giá Gốc --- */}
+                        <div className="flex flex-col items-start">
+                            {isSale ? (
+                                <>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-red-500 font-mono font-black text-lg">{formatMoney(realPrice)}</span>
+                                        <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold animate-pulse">FLASH SALE</span>
+                                    </div>
+                                    <span className="text-gray-500 line-through text-xs">{formatMoney(item.price)}</span>
+                                </>
+                            ) : (
+                                <span className="text-green-400 font-mono font-bold text-lg">{formatMoney(item.price)}</span>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col items-end justify-between gap-3 pl-2">
+                        <button onClick={() => removeFromCart(item.id, item.variantId)} className="text-gray-500 hover:text-red-500 transition p-1"><Trash2 className="w-5 h-5" /></button>
+                        <div className="flex items-center gap-2 bg-slate-900 rounded-lg p-1 border border-slate-700">
+                            <button onClick={() => decreaseQuantity(item.id, item.variantId)} className="p-1 hover:bg-slate-700 rounded"><Minus className="w-3 h-3" /></button>
+                            <span className="font-bold w-6 text-center text-sm">{item.quantity}</span>
+                            <button onClick={() => increaseQuantity(item.id, item.variantId)} className="p-1 hover:bg-slate-700 rounded"><Plus className="w-3 h-3" /></button>
+                        </div>
                     </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
 
-        {/* CỘT PHẢI: FORM THÔNG TIN */}
+        {/* === CỘT PHẢI: FORM THÔNG TIN === */}
         <div className="lg:col-span-5">
           <div className="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl sticky top-24">
             <h2 className="text-xl font-black mb-6 text-white uppercase border-b border-slate-700 pb-4 tracking-widest">Thông tin đặt lịch</h2>
             
             <div className="space-y-5">
-              {/* --- FORM NHẬP LIỆU --- */}
+              {/* INPUT FORM */}
               <div className="grid grid-cols-2 gap-4">
-                 <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block">Họ và tên *</label><input type="text" required className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors" value={customer.name} onChange={e => setCustomer({...customer, name: e.target.value})} /></div>
-                 <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block">Số điện thoại *</label><input type="tel" required className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors" value={customer.phone} onChange={e => setCustomer({...customer, phone: e.target.value})} /></div>
+                 <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block">Họ và tên *</label><input type="text" required className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors text-sm" value={customer.name} onChange={e => setCustomer({...customer, name: e.target.value})} /></div>
+                 <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block">Số điện thoại *</label><input type="tel" required className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors text-sm" value={customer.phone} onChange={e => setCustomer({...customer, phone: e.target.value})} /></div>
               </div>
-              <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block flex items-center gap-1"><Mail className="w-3 h-3"/> Email</label><input type="email" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors" value={customer.email} onChange={e => setCustomer({...customer, email: e.target.value})} /></div>
+              <div><label className="text-[10px] text-gray-500 font-black uppercase mb-1 block flex items-center gap-1"><Mail className="w-3 h-3"/> Email</label><input type="email" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-green-500 transition-colors text-sm" value={customer.email} onChange={e => setCustomer({...customer, email: e.target.value})} /></div>
 
+              {/* Showroom Info */}
               <div className="bg-slate-900/80 p-4 rounded-2xl border border-slate-700 space-y-4 shadow-inner">
                   <div><label className="text-[10px] text-green-500 font-black uppercase mb-1 flex items-center gap-1"><MapPin className="w-3 h-3"/> Địa điểm Showroom</label><div className="w-full text-sm text-gray-300 font-bold">{SHOWROOM_ADDRESS}</div></div>
-                  <div><label className="text-[10px] text-yellow-500 font-black uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3"/> Thời gian hẹn (08h - 18h) *</label><input type="datetime-local" required min={tomorrowStr} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white outline-none cursor-pointer focus:border-yellow-500 transition-colors" style={{ colorScheme: 'dark' }} value={pickupTime} onChange={e => setPickupTime(e.target.value)} /></div>
+                  <div><label className="text-[10px] text-yellow-500 font-black uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3"/> Thời gian hẹn (08h - 18h) *</label><input type="datetime-local" required min={tomorrowStr} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white outline-none cursor-pointer focus:border-yellow-500 transition-colors text-sm" style={{ colorScheme: 'dark' }} value={pickupTime} onChange={e => setPickupTime(e.target.value)} /></div>
               </div>
 
-              {/* --- KHU VỰC COUPON --- */}
+              {/* Coupon */}
               <div>
                 <label className="text-[10px] text-pink-500 font-black uppercase mb-1 block flex items-center gap-1"><Ticket className="w-3 h-3"/> Mã giảm giá</label>
                 <div className="flex gap-2">
@@ -273,36 +326,36 @@ const CartPage = () => {
                         </button>
                     )}
                 </div>
-                {appliedCoupon && <p className="text-green-500 text-xs mt-1 font-bold ml-1 flex items-center gap-1 animate-in slide-in-from-top-1"><Check size={12}/> Giảm {appliedCoupon.discount_type === 'percent' ? appliedCoupon.discount_value + '%' : formatRealPrice(appliedCoupon.discount_value)}</p>}
+                {appliedCoupon && <p className="text-green-500 text-xs mt-1 font-bold ml-1 flex items-center gap-1 animate-in slide-in-from-top-1"><Check size={12}/> Giảm {appliedCoupon.discount_type === 'percent' ? appliedCoupon.discount_value + '%' : formatMoney(appliedCoupon.discount_value)}</p>}
               </div>
 
-              {/* --- TỔNG TIỀN --- */}
+              {/* TỔNG TIỀN */}
               <div className="pt-4 border-t border-slate-700 space-y-2">
                 <div className="flex justify-between items-center text-sm text-gray-400">
                   <span>Tạm tính:</span>
-                  <span>{formatRealPrice(subTotal)}</span>
+                  <span>{formatMoney(subTotal)}</span>
                 </div>
                 {appliedCoupon && (
                     <div className="flex justify-between items-center text-sm text-pink-500 font-bold">
-                        <span>Giảm giá ({appliedCoupon.code}):</span>
-                        <span>- {formatRealPrice(discountAmount)}</span>
+                        <span>Giảm giá:</span>
+                        <span>- {formatMoney(discountAmount)}</span>
                     </div>
                 )}
                 <div className="flex justify-between items-center pt-2 border-t border-slate-700 border-dashed">
                   <span className="text-sm font-bold text-gray-300 uppercase tracking-widest">Tổng tiền xe:</span>
-                  <span className="text-xl font-bold text-white">{formatRealPrice(totalAfterDiscount)}</span>
+                  <span className="text-xl font-bold text-white">{formatMoney(totalAfterDiscount)}</span>
                 </div>
                 
                 <div className="bg-yellow-500/10 p-3 rounded-xl border border-yellow-500/30 flex justify-between items-center mt-2">
                   <span className="text-xs font-black text-yellow-500 uppercase tracking-widest">Cọc trước (30%):</span>
-                  <span className="text-2xl font-black text-yellow-400 font-mono">{formatRealPrice(totalDeposit)}</span>
+                  <span className="text-2xl font-black text-yellow-400 font-mono">{formatMoney(totalDeposit)}</span>
                 </div>
 
-                {/* --- PHƯƠNG THỨC THANH TOÁN --- */}
+                {/* PHƯƠNG THỨC THANH TOÁN */}
                 <div className="space-y-4 pt-4">
-                    <label className="text-xs font-black text-gray-400 uppercase tracking-widest block">Chọn phương thức đặt cọc:</label>
+                    <label className="text-xs font-black text-gray-400 uppercase tracking-widest block">Chọn phương thức:</label>
                     
-                    {/* Lựa chọn 1: Thanh toán sau */}
+                    {/* Tiền mặt */}
                     <div className="space-y-3">
                          <label className={`flex items-center gap-3 p-4 rounded-xl border cursor-pointer transition-all ${paymentMethod === 'cash' ? 'bg-green-600/10 border-green-500 ring-1 ring-green-500' : 'bg-slate-900 border-slate-700'}`}>
                             <input type="radio" name="payment" className="hidden" checked={paymentMethod === 'cash'} onChange={() => setPaymentMethod('cash')} />
@@ -311,7 +364,6 @@ const CartPage = () => {
                             </div>
                             <div className="flex-1">
                                 <span className={`block font-bold text-sm ${paymentMethod === 'cash' ? 'text-green-400' : 'text-white'}`}>Thanh toán tại Showroom</span>
-                                <span className="text-[10px] text-gray-400">Đến xem xe và đóng cọc trực tiếp bằng tiền mặt hoặc thẻ.</span>
                             </div>
                             {paymentMethod === 'cash' && <Check size={16} className="text-green-500"/>}
                          </label>
@@ -323,17 +375,10 @@ const CartPage = () => {
                          )}
                     </div>
 
-                    <div className="relative flex py-1 items-center">
-                        <div className="flex-grow border-t border-slate-700"></div>
-                        <span className="flex-shrink-0 mx-4 text-gray-600 text-[10px] font-bold uppercase">HOẶC</span>
-                        <div className="flex-grow border-t border-slate-700"></div>
-                    </div>
-
-                    {/* Lựa chọn 2: VNPay */}
+                    {/* VNPay */}
                     <button onClick={handleOnlinePayment} disabled={loading} className="w-full bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg shadow-blue-900/50 transition flex items-center justify-center gap-2 hover:scale-[1.02] border border-blue-500/30">
-                        {loading ? <Loader2 className="animate-spin"/> : <><CreditCard size={20} className="text-white"/> Đặt Cọc Ngay ({formatRealPrice(totalDeposit)})</>}
+                        {loading ? <Loader2 className="animate-spin"/> : <><CreditCard size={20} className="text-white"/> Cọc Online ({formatMoney(totalDeposit)})</>}
                     </button>
-                    <p className="text-[10px] text-center text-gray-500 flex justify-center items-center gap-1"><ShieldCheck size={12}/> Thanh toán an toàn qua cổng VNPay (Quét mã QR)</p>
                 </div>
               </div>
             </div>

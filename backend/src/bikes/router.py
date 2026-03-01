@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from pydantic import BaseModel, field_validator
-from datetime import datetime
+from datetime import datetime, timezone  # ✅ THÊM timezone
 
 from src.database import get_db
 from src.bikes.models import Make, Bike, BikeVariant, BikeVariantImage, Category, Color, TechnicalSpecification, BikeImage
@@ -20,7 +20,7 @@ from src.logs.utils import create_audit_log
 router = APIRouter()
 
 # ==========================================
-# SCHEMA CẬP NHẬT
+# SCHEMA CẬP NHẬT - ✅ ĐÃ FIX LỖI MÚI GIỜ
 # ==========================================
 class BikeUpdate(BaseModel):
     name: Optional[str] = None
@@ -45,19 +45,33 @@ class BikeUpdate(BaseModel):
     def parse_datetime_fields(cls, v):
         if v == "" or v is None:
             return None
+        
+        # ✅ 1. Nếu là chuỗi (từ Frontend gửi lên dạng ISO 8601)
+        if isinstance(v, str):
+            try:
+                # Chuyển Z thành +00:00 để Python hiểu là UTC
+                v = datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except ValueError:
+                return v
+
+        # ✅ 2. Xử lý Múi giờ: Ép về UTC và xóa thông tin múi giờ (Naive)
+        # Để khớp với cột TIMESTAMP WITHOUT TIME ZONE trong Database
+        if isinstance(v, datetime) and v.tzinfo is not None:
+            return v.astimezone(timezone.utc).replace(tzinfo=None)
+            
         return v
 
 # ==========================================
-# ✅ HELPER: TÍNH GIÁ THỰC TẾ THEO THỜI GIAN
+# ✅ HELPER: TÍNH GIÁ THỰC TẾ
 # ==========================================
 def compute_active_price(bike: Bike) -> dict:
     """
     Tính giá hiển thị thực tế dựa trên thời điểm hiện tại.
     Ưu tiên: Flash Sale > Discount > Giá gốc
     """
-    now = datetime.now()
+    now = datetime.now() # Lấy giờ hiện tại của server (Naive)
 
-    # 1. Kiểm tra Flash Sale có đang active không
+    # 1. Kiểm tra Flash Sale
     flash_active = (
         bike.is_flash_sale == True
         and bike.flash_sale_price is not None
@@ -72,7 +86,7 @@ def compute_active_price(bike: Bike) -> dict:
             "is_flash_sale": True,
         }
 
-    # 2. Kiểm tra Discount còn hạn không
+    # 2. Kiểm tra Discount thường
     discount_active = (
         bike.discount_price is not None
         and (bike.discount_end_date is None or bike.discount_end_date >= now)
@@ -135,11 +149,11 @@ def serialize_bike(bike: Bike) -> dict:
         "variants": variants_list,
         "total_quantity": bike.total_quantity,
         "in_stock": bike.in_stock,
-        # ✅ Các trường giá thực tế - Frontend chỉ cần dùng current_price
+        # ✅ Các trường giá thực tế
         "current_price": price_info["current_price"],
         "is_sale_active": price_info["is_sale_active"],
         "sale_type": price_info["sale_type"],
-        "is_flash_sale": price_info["is_flash_sale"],  # Trạng thái thực tế theo giờ
+        "is_flash_sale": price_info["is_flash_sale"], 
     }
 
 # ==========================================
@@ -228,7 +242,6 @@ async def create_bike(
     new_bike = Bike(**bike_data)
 
     for variant in variants_data:
-        # ✅ Fallback color_name = name nếu không điền
         if not variant.get('color_name'):
             variant['color_name'] = variant.get('name', '')
         new_bike.variants.append(BikeVariant(**variant))
@@ -318,7 +331,7 @@ async def delete_gallery_image(
     return {"message": "Đã xóa ảnh khỏi bộ sưu tập"}
 
 # ==========================================
-# 5. API LẤY CHI TIẾT XE ✅ Trả về current_price
+# 5. API LẤY CHI TIẾT XE
 # ==========================================
 @router.get("/{bike_id}")
 async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
@@ -330,7 +343,7 @@ async def get_bike(bike_id: int, db: AsyncSession = Depends(get_db)):
     return serialize_bike(bike)
 
 # ==========================================
-# 6. API DANH SÁCH XE ✅ Trả về current_price
+# 6. API DANH SÁCH XE
 # ==========================================
 @router.get("/")
 async def list_bikes(
@@ -358,7 +371,7 @@ async def list_bikes(
     if type:
         stmt = stmt.where(Bike.type.ilike(f"%{type}%"))
 
-    # ✅ Lọc flash sale theo thời gian thực
+    # ✅ Lọc flash sale theo thời gian thực (Logic Naive Datetime khớp DB)
     if is_flash_sale:
         now = datetime.now()
         stmt = stmt.where(
@@ -398,7 +411,7 @@ async def list_bikes(
     }
 
 # ==========================================
-# 7. API CẬP NHẬT XE
+# 7. API CẬP NHẬT XE - FIX LỖI 500
 # ==========================================
 @router.put("/{bike_id}", response_model=BikeResponse)
 async def update_bike(
@@ -413,7 +426,9 @@ async def update_bike(
     if not bike:
         raise HTTPException(404, "Không tìm thấy xe")
 
+    # update_data đã được validator xử lý múi giờ sạch sẽ
     update_data = bike_update.model_dump(exclude_unset=True)
+    
     specs_data = update_data.pop('specs', None)
     if specs_data:
         if bike.specs:
@@ -427,7 +442,9 @@ async def update_bike(
 
     await db.commit()
     await db.refresh(bike)
-    return bike
+    
+    # Trả về response có current_price
+    return serialize_bike(bike)
 
 # ==========================================
 # 8. API XOÁ XE
@@ -473,7 +490,6 @@ async def create_bulk_variants(
             name=v.name,
             price=v.price,
             quantity=v.quantity,
-            # ✅ Fallback color_name = name nếu không điền
             color_name=v.color_name if v.color_name else v.name,
             color_hex=v.color_hex,
             image_url=v.image_url if v.image_url else bike.image_url
