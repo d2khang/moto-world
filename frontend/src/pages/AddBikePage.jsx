@@ -52,7 +52,8 @@ function AddBikePage() {
   // --- 1. STATE THÔNG TIN XE & KHUYẾN MÃI ---
   const [formData, setFormData] = useState({
     name: '', brand: '', type: 'Sport', price: '', 
-    engine_cc: '', description: '', quantity: 0,
+    engine_cc: '', description: '', 
+    // quantity đã bị loại bỏ vì Bike không còn cột này (tính theo variants)
     // GIẢM GIÁ & FLASH SALE
     discount_price: '', discount_end_date: '',
     is_flash_sale: false, flash_sale_price: '', flash_sale_limit: '',
@@ -65,6 +66,9 @@ function AddBikePage() {
   const [variants, setVariants] = useState([
     { name: '', price: '', quantity: 1, files: [], previews: [] } 
   ])
+  
+  // Tính tổng tồn kho để hiển thị (UI only)
+  const [displayTotalQty, setDisplayTotalQty] = useState(0)
 
   // --- 3. STATE THÔNG SỐ ---
   const [specs, setSpecs] = useState({
@@ -74,7 +78,7 @@ function AddBikePage() {
 
   useEffect(() => {
     const totalQty = variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0)
-    setFormData(prev => ({ ...prev, quantity: totalQty }))
+    setDisplayTotalQty(totalQty)
   }, [variants])
 
   // --- HANDLERS ---
@@ -137,9 +141,11 @@ function AddBikePage() {
     const toastId = toast.loading("Đang xử lý dữ liệu...")
 
     try {
-      // ✅ XỬ LÝ DATA: Chuyển Number/parseFloat cho phép số lẻ
+      // ✅ FIX 1: Tách quantity ra khỏi payload (vì DB không có cột này)
+      const { quantity, ...restFormData } = formData 
+
       const bikePayload = {
-        ...formData,
+        ...restFormData, // Chỉ gửi các trường còn lại
         price: Number(formData.price),
         engine_cc: Number(formData.engine_cc) || 0,
         
@@ -154,24 +160,24 @@ function AddBikePage() {
         
         specs: { 
             ...specs, 
-            // ✅ SỬA LỖI QUAN TRỌNG: Dùng parseFloat cho TẤT CẢ thông số số
             power_hp: parseFloat(specs.power_hp) || 0, 
             torque_nm: parseFloat(specs.torque_nm) || 0,
             fuel_capacity_l: parseFloat(specs.fuel_capacity_l) || 0,
-            seat_height_mm: parseFloat(specs.seat_height_mm) || 0, // Đã đổi sang float
-            weight_kg: parseFloat(specs.weight_kg) || 0,           // Đã đổi sang float
-            top_speed_kmh: parseFloat(specs.top_speed_kmh) || 0    // Đã đổi sang float
+            seat_height_mm: parseFloat(specs.seat_height_mm) || 0,
+            weight_kg: parseFloat(specs.weight_kg) || 0,
+            top_speed_kmh: parseFloat(specs.top_speed_kmh) || 0
         }
       }
 
+      // 1. TẠO XE (Sẽ không lỗi vì không gửi quantity)
       const createRes = await axios.post('http://localhost:8000/api/bikes/', bikePayload, {
         headers: { Authorization: `Bearer ${token}` }
       })
       const newBikeId = createRes.data.id
 
-      // UPLOAD ẢNH
+      // 2. UPLOAD ẢNH (Ảnh chính + Ảnh biến thể)
       const allFiles = [mainFile]
-      const photoCounts = [1] 
+      const photoCounts = [1] // [1 ảnh chính, n ảnh variant 1, m ảnh variant 2...]
       variants.forEach(v => {
           allFiles.push(...v.files)
           photoCounts.push(v.files.length)
@@ -185,22 +191,24 @@ function AddBikePage() {
       })
       const uploadedUrls = uploadRes.data.urls
 
-      // CẬP NHẬT ẢNH CHÍNH
+      // 3. CẬP NHẬT URL ẢNH CHÍNH CHO XE
       await axios.put(`http://localhost:8000/api/bikes/${newBikeId}`, { image_url: uploadedUrls[0] }, {
           headers: { Authorization: `Bearer ${token}` }
       })
 
-      // TẠO BIẾN THỂ
+      // 4. TẠO CÁC BIẾN THỂ (Lấy URL ảnh tương ứng từ mảng đã upload)
       let pointer = 1 
       const finalVariants = variants.map((v, idx) => {
-          const count = photoCounts[idx + 1]
+          const count = photoCounts[idx + 1] // Số lượng ảnh của variant này
           const myUrls = uploadedUrls.slice(pointer, pointer + count)
           pointer += count
+          
           return {
               name: v.name,
               price: Number(v.price) || Number(formData.price),
-              quantity: Number(v.quantity),
-              image_url: myUrls.length > 0 ? myUrls[0] : uploadedUrls[0] 
+              quantity: Number(v.quantity), // Quantity lưu ở đây mới đúng
+              image_url: myUrls.length > 0 ? myUrls[0] : uploadedUrls[0], // Lấy ảnh đầu tiên của variant làm đại diện
+              // Có thể cần gửi thêm danh sách ảnh phụ của variant nếu backend hỗ trợ (ở đây ta tạm dùng logic cũ)
           }
       })
 
@@ -213,7 +221,8 @@ function AddBikePage() {
 
     } catch (error) {
       console.error(error)
-      toast.error("Lỗi hệ thống", { id: toastId })
+      const errMsg = error.response?.data?.detail || "Lỗi hệ thống"
+      toast.error(errMsg, { id: toastId })
     } finally {
       setLoading(false)
     }
@@ -269,7 +278,7 @@ function AddBikePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
               {/* ✅ step="any" cho Phân khối */}
               <InputGroup label="Phân khối (cc)"><StyledInput type="number" step="any" name="engine_cc" onChange={handleChange} /></InputGroup>
-              <InputGroup label="Tồn kho"><div className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-center font-bold text-yellow-500">{formData.quantity}</div></InputGroup>
+              <InputGroup label="Tổng Tồn kho (Tự động)"><div className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-center font-bold text-yellow-500">{displayTotalQty}</div></InputGroup>
               <div className="md:col-span-2"><InputGroup label="Mô tả"><textarea name="description" rows="3" onChange={handleChange} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 focus:border-green-500 outline-none resize-none" /></InputGroup></div>
             </div>
           </div>

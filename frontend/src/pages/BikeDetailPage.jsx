@@ -40,9 +40,10 @@ function BikeDetailPage() {
         const data = res.data
         setBike(data)
         
-        // Chọn biến thể đầu tiên và gán ảnh đại diện ban đầu
+        // Chọn biến thể đầu tiên (nếu có) để hiển thị thông tin giá/tồn kho
         if (data.variants && data.variants.length > 0) {
             setSelectedVariant(data.variants[0])
+            // Mặc định hiển thị ảnh của biến thể khi vừa vào
             setActiveImage(formatUrl(data.variants[0].image_url || data.image_url))
         } else {
             setActiveImage(formatUrl(data.image_url))
@@ -190,16 +191,32 @@ function BikeDetailPage() {
   if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center font-black uppercase tracking-widest">Đang tải...</div>
 
   // ============================================================
-  // LOGIC GALLERY: CHỈ LẤY TRONG MẢNG IMAGES (KHÔNG GỘP ẢNH ĐẠI DIỆN)
+  // ✅ LOGIC GALLERY ĐÃ SỬA: LUÔN ƯU TIÊN ẢNH GỐC (AVATAR)
   // ============================================================
   let thumbnails = []
-  if (selectedVariant && selectedVariant.images && selectedVariant.images.length > 0) {
-      // ✅ Nếu có biến thể: Chỉ lấy gallery của biến thể đó
-      thumbnails = selectedVariant.images.map(img => formatUrl(img.image_url))
-  } else {
-      // ✅ Nếu không: Lấy gallery chung của xe (Mảng images từ Backend)
-      thumbnails = (bike.images || []).map(i => formatUrl(i.image_url))
+
+  // 1. Luôn đưa ảnh đại diện gốc của xe (bike.image_url) lên đầu
+  const bikeAvatar = formatUrl(bike.image_url);
+  if (bikeAvatar) {
+      thumbnails.push(bikeAvatar);
   }
+
+  // 2. Xác định danh sách ảnh còn lại
+  let otherImages = [];
+  if (selectedVariant && selectedVariant.images && selectedVariant.images.length > 0) {
+      // Nếu biến thể có gallery riêng -> dùng gallery biến thể
+      otherImages = selectedVariant.images.map(img => formatUrl(img.image_url));
+  } else {
+      // Nếu không -> dùng gallery chung (images)
+      otherImages = (bike.images || []).map(i => formatUrl(i.image_url));
+  }
+
+  // 3. Gộp ảnh vào thumbnails (Lọc bỏ trùng lặp với ảnh đầu tiên)
+  otherImages.forEach(img => {
+      if (img !== bikeAvatar) {
+          thumbnails.push(img);
+      }
+  });
 
   const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.total_quantity;
   const isOutOfStock = (currentQuantity || 0) <= 0;
@@ -224,7 +241,7 @@ function BikeDetailPage() {
              )}
           </div>
 
-          {/* LIST THUMBNAILS (Chỉ lấy từ images gallery) */}
+          {/* LIST THUMBNAILS (Ảnh gốc luôn đứng đầu) */}
           {thumbnails.length > 0 && (
             <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
                {thumbnails.map((img, idx) => (

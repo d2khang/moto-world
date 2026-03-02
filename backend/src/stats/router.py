@@ -7,8 +7,7 @@ from src.database import get_db
 from src.auth.dependencies import get_current_user
 from src.auth.models import User
 from src.orders.models import Order, OrderItem
-from src.bikes.models import Bike
-
+from src.bikes.models import Bike, BikeVariant
 router = APIRouter()
 
 # --- HÀM KIỂM TRA QUYỀN (Dùng chung) ---
@@ -25,7 +24,7 @@ async def get_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    check_permission(current_user) # <--- Kiểm tra quyền
+    check_permission(current_user)
 
     # Xây dựng bộ lọc ngày
     date_filter = []
@@ -46,7 +45,9 @@ async def get_summary(
     total_orders = orders_res.scalar() or 0
 
     # 3. Tổng xe trong kho
-    bikes_query = select(func.sum(Bike.quantity))
+    # --- SỬA LỖI TẠI ĐÂY ---
+    # Thay vì lấy Bike.quantity (không tồn tại), ta lấy tổng quantity của tất cả BikeVariant
+    bikes_query = select(func.sum(BikeVariant.quantity))
     bikes_res = await db.execute(bikes_query)
     total_bikes = bikes_res.scalar() or 0
 

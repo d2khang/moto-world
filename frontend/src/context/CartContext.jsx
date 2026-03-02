@@ -5,76 +5,86 @@ const CartContext = createContext()
 export const useCart = () => useContext(CartContext)
 
 export const CartProvider = ({ children }) => {
+  // 1. KHỞI TẠO GIỎ HÀNG TỪ LOCAL STORAGE
   const [cartItems, setCartItems] = useState(() => {
-    const savedCart = localStorage.getItem('cart')
-    return savedCart ? JSON.parse(savedCart) : []
+    try {
+      const savedCart = localStorage.getItem('cart')
+      return savedCart ? JSON.parse(savedCart) : []
+    } catch (error) {
+      console.error("Lỗi parse giỏ hàng:", error)
+      return []
+    }
   })
 
+  // 2. TỰ ĐỘNG LƯU VÀO LOCAL STORAGE KHI GIỎ HÀNG THAY ĐỔI
   useEffect(() => {
     localStorage.setItem('cart', JSON.stringify(cartItems))
   }, [cartItems])
 
-  // --- 1. HÀM THÊM VÀO GIỎ (ĐÃ FIX LOGIC GIÁ KHUYẾN MÃI) ---
+  // --- HÀM THÊM VÀO GIỎ (CORE LOGIC) ---
   const addToCart = (product, variant = null) => {
     setCartItems(prev => {
+      // Xác định ID của biến thể (nếu không có thì là 'base')
       const variantId = variant?.id || 'base';
 
+      // Tìm xem sản phẩm + biến thể này đã có trong giỏ chưa
       const existingItem = prev.find(item => 
         item.id === product.id && item.variantId === variantId
       )
 
-      // === LOGIC TÍNH GIÁ QUAN TRỌNG ===
+      // === A. TÍNH TOÁN GIÁ (Quan trọng) ===
+      // 1. Giá gốc: Ưu tiên giá biến thể, nếu không có thì lấy giá xe
+      const basePrice = Number(variant?.price || product.price);
       
-      // 1. Xác định giá gốc của phiên bản (Lấy từ biến thể nếu có, không thì lấy từ xe mẹ)
-      const basePrice = variant ? variant.price : product.price;
-      
-      // 2. Tính toán giá bán thực tế (Sale Price)
+      // 2. Giá sau giảm:
+      // Logic: Nếu xe đang giảm giá (current < price), ta tính số tiền giảm được
+      // rồi trừ vào giá của biến thể (nếu biến thể đắt hơn giá gốc)
       let finalSalePrice = basePrice;
+      const productPrice = Number(product.price);
+      const productCurrentPrice = Number(product.current_price || product.price);
 
-      // Kiểm tra xe mẹ có đang giảm giá không (Backend trả về current_price < price)
-      if (product.current_price && product.current_price < product.price) {
-          // Tính số tiền mặt được giảm (Ví dụ: 464tr - 454tr = 10tr)
-          const cashDiscount = product.price - product.current_price;
-          
-          // Áp dụng mức giảm tiền mặt này vào giá của biến thể
-          finalSalePrice = basePrice - cashDiscount;
+      if (productCurrentPrice < productPrice) {
+          const discountAmount = productPrice - productCurrentPrice; // VD: Giảm 10tr
+          finalSalePrice = basePrice - discountAmount; // Giá biến thể - 10tr
       }
 
-      // === LOGIC ẢNH ===
-      // Ưu tiên ảnh biến thể, nếu không có dùng ảnh xe mẹ
-      let itemImage = product.image_url;
-      if (variant && variant.image_url) {
-          itemImage = variant.image_url;
-      }
+      // === B. XỬ LÝ HÌNH ẢNH (ĐÃ SỬA) ===
+      // Yêu cầu: Luôn dùng ảnh đại diện chính của xe (product.image_url)
+      // Bỏ qua ảnh của biến thể (variant.image_url)
+      const itemImage = product.image_url;
 
+      // === C. CẬP NHẬT STATE ===
       if (existingItem) {
+        // Nếu đã có -> Tăng số lượng & Cập nhật giá/ảnh mới nhất
         return prev.map(item => 
           (item.id === product.id && item.variantId === variantId)
             ? { 
                 ...item, 
                 quantity: item.quantity + 1,
-                price: basePrice,           // Cập nhật lại giá gốc mới nhất
-                current_price: finalSalePrice // Cập nhật lại giá sale mới nhất
+                price: basePrice,           
+                current_price: finalSalePrice,
+                image: itemImage // Cập nhật lại ảnh đại diện chính
               }
             : item
         )
       }
 
+      // Nếu chưa có -> Thêm mới
       return [...prev, {
         id: product.id,
         name: product.name,
-        price: basePrice,               // Lưu để hiển thị giá gạch ngang
-        current_price: finalSalePrice,  // Lưu giá thực tế người dùng phải trả
-        image: itemImage,
+        price: basePrice,             // Giá gốc (để gạch ngang)
+        current_price: finalSalePrice,// Giá thực tế phải trả
+        image: itemImage,             // Ảnh đại diện chính của xe
         variantId: variantId,
-        variantName: variant?.name || (variant?.color_name ? variant.color_name : 'Tiêu chuẩn'),
+        variantName: variant?.name || 'Tiêu chuẩn',
         quantity: 1,
         is_flash_sale: product.is_flash_sale || false
       }]
     })
   }
 
-  // --- 2. TĂNG SỐ LƯỢNG ---
+  // --- TĂNG SỐ LƯỢNG ---
   const increaseQuantity = (productId, variantId) => {
     setCartItems(prev => prev.map(item => {
       if (item.id === productId && item.variantId === variantId) {
@@ -84,32 +94,47 @@ export const CartProvider = ({ children }) => {
     }))
   }
 
-  // --- 3. GIẢM SỐ LƯỢNG ---
+  // --- GIẢM SỐ LƯỢNG ---
   const decreaseQuantity = (productId, variantId) => {
     setCartItems(prev => prev.map(item => {
       if (item.id === productId && item.variantId === variantId) {
-        return { ...item, quantity: item.quantity > 1 ? item.quantity - 1 : 1 }
+        const newQty = item.quantity - 1
+        return { ...item, quantity: newQty > 0 ? newQty : 1 }
       }
       return item
     }))
   }
 
+  // --- XÓA KHỎI GIỎ ---
   const removeFromCart = (productId, variantId) => {
     setCartItems(prev => prev.filter(item => !(item.id === productId && item.variantId === variantId)))
   }
 
+  // --- XÓA HẾT ---
   const clearCart = () => {
     setCartItems([])
+    localStorage.removeItem('cart')
   }
 
-  // --- 4. TÍNH TỔNG TIỀN (DÙNG GIÁ SALE THỰC TẾ) ---
+  // --- TÍNH TỔNG TIỀN (DÙNG CHO NAVBAR HIỂN THỊ NHANH) ---
   const totalAmount = cartItems.reduce((total, item) => {
-      const finalPrice = item.current_price || item.price;
-      return total + (finalPrice * item.quantity);
+      // Ưu tiên dùng giá sale nếu có và thấp hơn giá gốc
+      const finalPrice = (item.current_price && item.current_price < item.price) 
+                          ? item.current_price 
+                          : item.price;
+      return total + (Number(finalPrice) * item.quantity);
   }, 0)
 
   return (
-    <CartContext.Provider value={{ cartItems, addToCart, increaseQuantity, decreaseQuantity, removeFromCart, clearCart, totalAmount }}>
+    <CartContext.Provider value={{ 
+        cartItems, 
+        addToCart, 
+        increaseQuantity, 
+        decreaseQuantity, 
+        removeFromCart, 
+        clearCart, 
+        totalAmount 
+    }}>
       {children}
     </CartContext.Provider>
   )

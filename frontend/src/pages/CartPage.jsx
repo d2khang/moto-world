@@ -36,6 +36,13 @@ const CartPage = () => {
     // Mặc định trả về giá gốc
     return item.price;
   }
+  
+  // ✅ HELPER: Định dạng URL ảnh chuẩn
+  const formatUrl = (url) => {
+    if (!url) return "https://via.placeholder.com/150?text=No+Image";
+    if (url.startsWith('http')) return url;
+    return `http://localhost:8000/${url}`; 
+  }
 
   // --- 2. TÍNH TỔNG TIỀN DỰA TRÊN GIÁ THỰC TẾ ---
   const subTotal = cartItems.reduce((total, item) => {
@@ -145,6 +152,7 @@ const CartPage = () => {
         // ✅ QUAN TRỌNG: Gửi giá thực tế (đã giảm) lên server
         price: getRealPrice(item), 
         quantity: item.quantity,
+        // ✅ Gửi đúng URL ảnh (biến thể hoặc gốc) lên server để lưu vào order
         image_url: item.image || item.image_url || "" 
       }))
     }
@@ -240,14 +248,17 @@ const CartPage = () => {
             {cartItems.map((item) => {
               const realPrice = getRealPrice(item); // Lấy giá thực tế để hiển thị
               const isSale = realPrice < item.price; // Check xem có đang sale không
+              
+              // ✅ LOGIC CHỌN ẢNH HIỂN THỊ: Ưu tiên ảnh biến thể -> ảnh sản phẩm
+              const displayImage = formatUrl(item.image || item.image_url);
 
               return (
                 <div key={`${item.id}-${item.variantId}`} className="bg-slate-800 p-4 rounded-2xl flex gap-4 border border-slate-700 shadow-xl items-center relative overflow-hidden group">
                     
-                    {/* --- ✅ FIX LỖI HÌNH ẢNH: Container chữ nhật + object-contain --- */}
+                    {/* --- ✅ HIỂN THỊ HÌNH ẢNH --- */}
                     <div className="w-32 h-24 flex-shrink-0 bg-white rounded-xl border border-slate-600 overflow-hidden relative">
                         <img 
-                            src={item.image || item.image_url} 
+                            src={displayImage} 
                             alt={item.name} 
                             className="absolute inset-0 w-full h-full object-contain p-2 hover:scale-110 transition-transform duration-500" 
                         />
@@ -257,7 +268,7 @@ const CartPage = () => {
                         <h3 className="text-lg font-bold uppercase truncate">{item.name}</h3>
                         <p className="text-gray-400 text-xs mb-2 italic">Phiên bản: {item.variantName || "Tiêu chuẩn"}</p>
                         
-                        {/* --- ✅ FIX LỖI GIÁ: Hiển thị giá Sale và Giá Gốc --- */}
+                        {/* --- ✅ HIỂN THỊ GIÁ --- */}
                         <div className="flex flex-col items-start">
                             {isSale ? (
                                 <>
