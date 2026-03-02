@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload
@@ -13,18 +13,20 @@ from src.auth.models import User
 from src.database import get_db
 from src.auth.dependencies import get_current_user
 
-# --- IMPORT LOG & NOTIFICATION ---
+# --- IMPORT LOG & NOTIFICATION & EMAIL ---
 from src.logs.router import create_log 
 from src.notifications.models import Notification
+from src.notifications.email_service import send_order_confirmation_email # <--- MỚI THÊM
 
 router = APIRouter()
 
 # ==========================================
-# 1. TẠO ĐƠN HÀNG (Trừ kho + Áp dụng Coupon + TẠO THÔNG BÁO)
+# 1. TẠO ĐƠN HÀNG (Trừ kho + Áp dụng Coupon + TẠO THÔNG BÁO + GỬI MAIL)
 # ==========================================
 @router.post("/", response_model=schemas.OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(
     order_in: schemas.OrderCreate,
+    background_tasks: BackgroundTasks, # <--- MỚI THÊM: Để chạy gửi mail ngầm
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -114,7 +116,7 @@ async def create_order(
         else:
             raise HTTPException(status_code=404, detail="Mã giảm giá không tồn tại.")
 
-    # --- BƯỚC 3: TẠO ĐƠN HÀNG (QUAN TRỌNG: XỬ LÝ ĐỊA CHỈ) ---
+    # --- BƯỚC 3: TẠO ĐƠN HÀNG ---
     
     # Logic fallback: Nếu thiếu địa chỉ chi tiết, dùng customer_address điền tạm
     full_address = order_in.customer_address or ""
@@ -195,7 +197,39 @@ async def create_order(
         .where(models.Order.id == new_order.id)
     )
     result = await db.execute(stmt)
-    return result.scalar_one()
+    final_order = result.scalar_one()
+
+    # ========================================================
+    # 📧 GỬI EMAIL XÁC NHẬN (BACKGROUND TASK)
+    # ========================================================
+    if final_order.customer_email:
+        # Chuẩn bị dữ liệu cho template email
+        email_data = {
+            "id": final_order.id,
+            "created_at": final_order.created_at.strftime("%d/%m/%Y %H:%M"),
+            "customer_name": final_order.customer_name,
+            "payment_method": final_order.payment_method,
+            "address": final_order.address_detail,
+            "total_amount": final_order.total_price,
+            "items": [
+                {
+                    "product_name": item.product_name,
+                    "variant_name": item.variant_name,
+                    "quantity": item.quantity,
+                    "price": item.price
+                } for item in final_order.items
+            ]
+        }
+        
+        # Thêm task gửi mail vào hàng đợi (không chặn response)
+        background_tasks.add_task(
+            send_order_confirmation_email, 
+            final_order.customer_email, 
+            email_data
+        )
+    # ========================================================
+
+    return final_order
 
 # ==========================================
 # 2. KHÁCH HÀNG: XEM LỊCH SỬ ĐƠN
