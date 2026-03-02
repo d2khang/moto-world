@@ -32,24 +32,27 @@ const Footer = () => {
             </ul>
           </div>
 
-          {/* CỘT 3: HỖ TRỢ KHÁCH HÀNG (SỬA LẠI LINK CHUẨN Ở ĐÂY) */}
+          {/* CỘT 3: HỖ TRỢ KHÁCH HÀNG */}
           <div>
             <h3 className="text-white font-bold uppercase mb-4 text-sm tracking-wider">Hỗ Trợ Khách Hàng</h3>
             <ul className="space-y-3 text-sm font-medium">
               <li>
-                {/* Link trỏ về /warranty thay vì /about */}
                 <Link to="/warranty" className="hover:text-green-500 transition-colors flex items-center gap-2">
                   Chính sách bảo hành
                 </Link>
               </li>
               <li>
-                {/* Link trỏ về /installment */}
+                {/* --- MỚI THÊM --- */}
+                <Link to="/payment-methods" className="hover:text-green-500 transition-colors flex items-center gap-2">
+                  Phương thức thanh toán
+                </Link>
+              </li>
+              <li>
                 <Link to="/installment" className="hover:text-green-500 transition-colors flex items-center gap-2">
                   Mua trả góp 0%
                 </Link>
               </li>
               <li>
-                {/* Link trỏ về /recruitment */}
                 <Link to="/recruitment" className="hover:text-green-500 transition-colors flex items-center gap-2">
                   Tuyển dụng nhân sự
                   <span className="text-[10px] bg-red-600 text-white px-1.5 rounded ml-1">HOT</span>

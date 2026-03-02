@@ -40,13 +40,24 @@ function BikeDetailPage() {
         const data = res.data
         setBike(data)
         
-        // Chọn biến thể đầu tiên (nếu có) để hiển thị thông tin giá/tồn kho
+        // Mặc định chọn biến thể đầu tiên (nếu có)
         if (data.variants && data.variants.length > 0) {
-            setSelectedVariant(data.variants[0])
-            // Mặc định hiển thị ảnh của biến thể khi vừa vào
-            setActiveImage(formatUrl(data.variants[0].image_url || data.image_url))
+            const firstVar = data.variants[0];
+            setSelectedVariant(firstVar);
+
+            // LOGIC CHỌN ẢNH KHỞI TẠO:
+            // 1. Ảnh đại diện của biến thể
+            // 2. Ảnh đầu tiên trong gallery của biến thể
+            // 3. Ảnh gốc của xe
+            let initImg = firstVar.image_url;
+            if (!initImg && firstVar.images && firstVar.images.length > 0) {
+                initImg = firstVar.images[0].image_url;
+            }
+            setActiveImage(formatUrl(initImg || data.image_url));
+
         } else {
-            setActiveImage(formatUrl(data.image_url))
+            // Không có biến thể -> Lấy ảnh gốc
+            setActiveImage(formatUrl(data.image_url));
         }
       } catch (error) {
         toast.error("Không thể tải thông tin xe")
@@ -82,12 +93,22 @@ function BikeDetailPage() {
     return () => clearInterval(timer);
   }, [bike]);
 
-  // 3. ĐỔI ẢNH KHI CHỌN BIẾN THỂ
+  // 3. ĐỔI ẢNH KHI CHỌN BIẾN THỂ (SỬA LẠI LOGIC ƯU TIÊN)
   useEffect(() => {
       if (selectedVariant) {
-          setActiveImage(formatUrl(selectedVariant.image_url || bike?.image_url))
+          // Khi chọn màu, tìm ảnh để hiển thị theo thứ tự ưu tiên:
+          // 1. Ảnh đại diện riêng của màu đó
+          // 2. Ảnh đầu tiên trong bộ sưu tập của màu đó
+          // 3. (Fallback) Ảnh gốc của xe
+          
+          let imgToShow = selectedVariant.image_url;
+          if (!imgToShow && selectedVariant.images && selectedVariant.images.length > 0) {
+              imgToShow = selectedVariant.images[0].image_url;
+          }
+          
+          setActiveImage(formatUrl(imgToShow || bike?.image_url));
       }
-  }, [selectedVariant])
+  }, [selectedVariant, bike])
 
   const handleAddToCart = () => {
       const qty = selectedVariant ? selectedVariant.quantity : bike.total_quantity;
@@ -191,32 +212,42 @@ function BikeDetailPage() {
   if (loading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center font-black uppercase tracking-widest">Đang tải...</div>
 
   // ============================================================
-  // ✅ LOGIC GALLERY ĐÃ SỬA: LUÔN ƯU TIÊN ẢNH GỐC (AVATAR)
+  // ✅ LOGIC GALLERY (ĐÃ SỬA): CHIA TÁCH HOÀN TOÀN
   // ============================================================
   let thumbnails = []
 
-  // 1. Luôn đưa ảnh đại diện gốc của xe (bike.image_url) lên đầu
-  const bikeAvatar = formatUrl(bike.image_url);
-  if (bikeAvatar) {
-      thumbnails.push(bikeAvatar);
-  }
+  if (selectedVariant) {
+      // --- TRƯỜNG HỢP 1: ĐANG CHỌN BIẾN THỂ (MÀU) ---
+      // CHỈ lấy ảnh của biến thể đó.
+      
+      // 1. Lấy ảnh đại diện của biến thể
+      const variantMainImg = formatUrl(selectedVariant.image_url);
+      if (variantMainImg) thumbnails.push(variantMainImg);
 
-  // 2. Xác định danh sách ảnh còn lại
-  let otherImages = [];
-  if (selectedVariant && selectedVariant.images && selectedVariant.images.length > 0) {
-      // Nếu biến thể có gallery riêng -> dùng gallery biến thể
-      otherImages = selectedVariant.images.map(img => formatUrl(img.image_url));
-  } else {
-      // Nếu không -> dùng gallery chung (images)
-      otherImages = (bike.images || []).map(i => formatUrl(i.image_url));
-  }
-
-  // 3. Gộp ảnh vào thumbnails (Lọc bỏ trùng lặp với ảnh đầu tiên)
-  otherImages.forEach(img => {
-      if (img !== bikeAvatar) {
-          thumbnails.push(img);
+      // 2. Lấy bộ sưu tập ảnh của biến thể (nếu có)
+      if (selectedVariant.images && selectedVariant.images.length > 0) {
+          selectedVariant.images.forEach(img => {
+              const url = formatUrl(img.image_url);
+              // Chỉ thêm nếu khác ảnh đại diện để tránh trùng
+              if (url !== variantMainImg) thumbnails.push(url);
+          });
       }
-  });
+      
+      // Nếu biến thể không có ảnh nào -> Để trống (Không fallback về ảnh xe gốc để tránh nhầm màu)
+
+  } else {
+      // --- TRƯỜNG HỢP 2: KHÔNG CÓ BIẾN THỂ (HOẶC CHƯA CHỌN) ---
+      // Lấy ảnh gốc của xe
+      const bikeMainImg = formatUrl(bike.image_url);
+      if (bikeMainImg) thumbnails.push(bikeMainImg);
+
+      if (bike.images && bike.images.length > 0) {
+          bike.images.forEach(img => {
+              const url = formatUrl(img.image_url);
+              if (url !== bikeMainImg) thumbnails.push(url);
+          });
+      }
+  }
 
   const currentQuantity = selectedVariant ? selectedVariant.quantity : bike.total_quantity;
   const isOutOfStock = (currentQuantity || 0) <= 0;
@@ -241,7 +272,7 @@ function BikeDetailPage() {
              )}
           </div>
 
-          {/* LIST THUMBNAILS (Ảnh gốc luôn đứng đầu) */}
+          {/* LIST THUMBNAILS (Đã lọc theo màu) */}
           {thumbnails.length > 0 && (
             <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
                {thumbnails.map((img, idx) => (

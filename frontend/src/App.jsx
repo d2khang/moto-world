@@ -23,6 +23,7 @@ import UserProfilePage from './pages/UserProfilePage'
 import PaymentResultPage from './pages/PaymentResultPage';
 import ComparePage from './pages/ComparePage'
 import OrderHistory from './pages/OrderHistory';
+import PaymentMethodsPage from './pages/PaymentMethodsPage'; // <--- MỚI THÊM
 
 // --- ADMIN ---
 import AdminDashboardPage from './pages/AdminDashboardPage';
@@ -56,7 +57,7 @@ function App() {
                 <Route path="/warranty" element={<WarrantyPage />} />
                 <Route path="/installment" element={<InstallmentPage />} />
                 <Route path="/recruitment" element={<RecruitmentPage />} />
-                
+                <Route path="/payment-methods" element={<PaymentMethodsPage />} /> {/* <--- ROUTE MỚI */}
                 
                 <Route path="/my-orders" element={<ProtectedRoute><OrderHistory /></ProtectedRoute>} />
                 <Route path="/orders" element={<ProtectedRoute><OrderHistory /></ProtectedRoute>} />
@@ -65,7 +66,7 @@ function App() {
                 <Route path="/profile" element={<ProtectedRoute><UserProfilePage /></ProtectedRoute>} />
                 <Route path="/payment-result" element={<PaymentResultPage />} />
 
-                {/* Khu vực Admin giữ nguyên */}
+                {/* Khu vực Admin */}
                 <Route path="/admin/users" element={<ProtectedRoute onlySuperAdmin={true}><AdminUserManager /></ProtectedRoute>} />
                 <Route path="/admin/logs" element={<ProtectedRoute onlySuperAdmin={true}><AdminLogsPage /></ProtectedRoute>} />
                 <Route path="/admin/dashboard" element={<ProtectedRoute requireAdmin={true}><AdminDashboardPage /></ProtectedRoute>} />
