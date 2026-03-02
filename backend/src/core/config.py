@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field # Import thêm Field để xử lý biến môi trường an toàn hơn
 
 class Settings(BaseSettings):
     # 1. Cấu hình Database & Token
@@ -7,7 +8,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # 2. Cấu hình Email (Cần đầy đủ các trường này để fastapi-mail hoạt động)
+    # 2. Cấu hình Email
     MAIL_USERNAME: str
     MAIL_PASSWORD: str
     MAIL_FROM: str
@@ -18,10 +19,15 @@ class Settings(BaseSettings):
     # 3. Cấu hình AI Chatbot
     GROQ_API_KEY: str = ""
 
+    # 4. Cấu hình Cloudinary (THÊM MỚI)
+    # Các giá trị này lấy từ Dashboard của Cloudinary
+    CLOUDINARY_CLOUD_NAME: str = Field(..., description="Cloud Name từ Cloudinary")
+    CLOUDINARY_API_KEY: str = Field(..., description="API Key từ Cloudinary")
+    CLOUDINARY_API_SECRET: str = Field(..., description="API Secret từ Cloudinary")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        # Bỏ qua các biến thừa trong file .env để tránh lỗi validation
-        extra = "ignore" 
+        extra = "ignore" # Bỏ qua biến thừa
 
 settings = Settings()

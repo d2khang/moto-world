@@ -1,6 +1,4 @@
-import shutil
 import uuid
-import os
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, distinct
@@ -8,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from pydantic import BaseModel, field_validator
-from datetime import datetime, timezone  # ✅ THÊM timezone
+from datetime import datetime, timezone
 
 from src.database import get_db
 from src.bikes.models import Make, Bike, BikeVariant, BikeVariantImage, Category, Color, TechnicalSpecification, BikeImage
@@ -16,6 +14,9 @@ from src.bikes.schemas import BikeCreate, BikeResponse, BikeVariantCreate
 from src.auth.dependencies import get_current_user
 from src.auth.models import User
 from src.logs.utils import create_audit_log
+
+# ✅ IMPORT MODULE UPLOAD MỚI (CLOUD STORAGE)
+from src.core.storage import upload_image_to_cloud
 
 router = APIRouter()
 
@@ -260,7 +261,7 @@ async def create_bike(
         raise HTTPException(status_code=400, detail="Lỗi dữ liệu: Trùng tên hoặc lỗi ràng buộc.")
 
 # ==========================================
-# 2. API UPLOAD GALLERY XE
+# 2. API UPLOAD GALLERY XE - ✅ ĐÃ CẬP NHẬT CLOUD
 # ==========================================
 @router.post("/{bike_id}/gallery", status_code=201)
 async def upload_bike_gallery(
@@ -269,29 +270,30 @@ async def upload_bike_gallery(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """
+    API Upload ảnh Gallery cho xe.
+    Đã chuyển sang dùng Cloudinary thay vì lưu Local.
+    """
     check_staff_permission(current_user)
     bike = await db.get(Bike, bike_id)
     if not bike:
         raise HTTPException(404, "Xe không tồn tại")
 
     saved_images = []
-    upload_dir = "static/uploads/bikes"
-    os.makedirs(upload_dir, exist_ok=True)
-
+    
     for file in files:
         if not file.content_type.startswith("image/"):
             continue
-        file_ext = file.filename.split(".")[-1]
-        unique_name = f"{bike_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
-        file_path = f"{upload_dir}/{unique_name}"
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        url = f"http://localhost:8000/{file_path}"
-        db.add(BikeImage(bike_id=bike_id, image_url=url, is_primary=False))
-        saved_images.append(url)
+        
+        # Gọi hàm helper để upload lên Cloudinary
+        cloud_url = upload_image_to_cloud(file, folder="moto_world/bikes")
+        
+        # Lưu URL vào Database
+        db.add(BikeImage(bike_id=bike_id, image_url=cloud_url, is_primary=False))
+        saved_images.append(cloud_url)
 
     await db.commit()
-    return {"message": f"Đã upload {len(saved_images)} ảnh", "urls": saved_images}
+    return {"message": f"Đã upload {len(saved_images)} ảnh lên Cloud", "urls": saved_images}
 
 # ==========================================
 # 3. API ĐẶT ẢNH ĐẠI DIỆN CHÍNH
@@ -499,7 +501,7 @@ async def create_bulk_variants(
     return {"message": f"Đã cập nhật {len(variants_in)} phiên bản thành công"}
 
 # ==========================================
-# 10. API UPLOAD GALLERY BIẾN THỂ
+# 10. API UPLOAD GALLERY BIẾN THỂ - ✅ ĐÃ CẬP NHẬT CLOUD
 # ==========================================
 @router.post("/{bike_id}/variants/{variant_id}/gallery", status_code=201)
 async def upload_variant_gallery(
@@ -514,10 +516,9 @@ async def upload_variant_gallery(
     if not variant or variant.bike_id != bike_id:
         raise HTTPException(404, "Biến thể không tồn tại")
 
-    saved = []
-    upload_dir = f"static/uploads/variants/{variant_id}"
-    os.makedirs(upload_dir, exist_ok=True)
-
+    saved_urls = []
+    
+    # Kiểm tra xem variant này đã có ảnh đại diện chưa
     existing_primary = (await db.execute(
         select(BikeVariantImage).where(
             BikeVariantImage.variant_id == variant_id,
@@ -528,19 +529,22 @@ async def upload_variant_gallery(
     for file in files:
         if not file.content_type.startswith("image/"):
             continue
-        ext = file.filename.split(".")[-1]
-        path = f"{upload_dir}/{uuid.uuid4().hex[:8]}.{ext}"
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        url = f"http://localhost:8000/{path}"
-        is_primary = (len(saved) == 0 and existing_primary is None)
-        db.add(BikeVariantImage(variant_id=variant_id, image_url=url, is_primary=is_primary))
+        
+        # Upload lên Cloudinary
+        cloud_url = upload_image_to_cloud(file, folder="moto_world/variants")
+        
+        # Xác định xem có phải ảnh đại diện không
+        is_primary = (len(saved_urls) == 0 and existing_primary is None)
+        
+        # Lưu DB
+        db.add(BikeVariantImage(variant_id=variant_id, image_url=cloud_url, is_primary=is_primary))
         if is_primary:
-            variant.image_url = url
-        saved.append(url)
+            variant.image_url = cloud_url
+            
+        saved_urls.append(cloud_url)
 
     await db.commit()
-    return {"message": f"Đã upload {len(saved)} ảnh cho biến thể", "urls": saved}
+    return {"message": f"Đã upload {len(saved_urls)} ảnh lên Cloud", "urls": saved_urls}
 
 # ==========================================
 # 11. API LẤY GALLERY BIẾN THỂ
