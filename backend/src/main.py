@@ -1,6 +1,10 @@
+# File: backend/src/main.py
+# Chức năng: Entry point của ứng dụng FastAPI, cấu hình CORS, Cloudinary và các Router.
+# Logic: Đã chuyển đổi logic upload file local sang Cloudinary để phù hợp môi trường deploy.
+
 import os
-import shutil
 import uuid
+import shutil
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +13,11 @@ from pydantic import BaseModel
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi import Request
-# --- IMPORT DATABASE & MODELS ---
+import cloudinary
+import cloudinary.uploader
+
+# --- IMPORT CONFIG & DATABASE ---
+from src.core.config import settings  # Import settings từ config
 from src.database import get_db, engine, Base
 from src.auth import models as auth_models 
 from src.auth.utils import get_password_hash, verify_password 
@@ -26,18 +34,33 @@ from src.users.router import router as users_router
 from src.logs.router import router as logs_router
 from src.notifications.router import router as notifications_router 
 from src.promo.router import router as promo_router
-
 from src.chat.router import router as chat_router 
+
+# --- CẤU HÌNH CLOUDINARY ---
+# Thiết lập kết nối Cloudinary dựa trên thông tin trong config.py
+cloudinary.config(
+    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+    api_key=settings.CLOUDINARY_API_KEY,
+    api_secret=settings.CLOUDINARY_API_SECRET
+)
 
 app = FastAPI(title="Moto World API", version="1.0.0")
 
-# --- CẤU HÌNH STATIC FILES ---
+# --- CẤU HÌNH STATIC FILES (Giữ lại để tương thích ngược nếu cần, nhưng production nên dùng Cloudinary) ---
 if not os.path.exists("static/uploads"):
     os.makedirs("static/uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- CẤU HÌNH CORS ---
-origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
+# Cho phép các domain frontend truy cập. Khi deploy, hãy thêm domain Vercel của bạn vào list này.
+origins = [
+    "http://localhost:5173", 
+    "http://127.0.0.1:5173", 
+    "http://localhost:3000",
+    "https://moto-world-frontend.vercel.app", # Ví dụ domain frontend sau khi deploy
+    "*" # Lưu ý: Khi chạy chính thức nên hạn chế "*" và điền chính xác domain
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -49,6 +72,7 @@ app.add_middleware(
 # --- KHỞI TẠO DATABASE ---
 @app.on_event("startup")
 async def startup():
+    # Lưu ý: Trên production, nên dùng Alembic để migrate DB thay vì create_all
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -63,7 +87,6 @@ app.include_router(users_router, prefix="/api/users", tags=["Users"])
 app.include_router(promo_router, prefix="/api/promo", tags=["Promo Banner"])
 app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["Notifications"])
-# Kết nối Chat AI vào hệ thống
 app.include_router(chat_router, prefix="/api/chat", tags=["AI Chatbot"])
 
 # --- ROOT API ---
@@ -96,22 +119,32 @@ async def upload_avatar(
     current_user: auth_models.User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Hàm upload avatar đã được sửa đổi để upload trực tiếp lên Cloudinary.
+    Điều này giải quyết vấn đề mất file khi deploy lên Render/Heroku.
+    """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Chỉ hỗ trợ định dạng hình ảnh")
 
-    file_extension = file.filename.split(".")[-1]
-    unique_filename = f"avatar_{current_user.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
-    file_path = f"static/uploads/{unique_filename}"
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        # Upload file lên Cloudinary
+        # file.file là file object, folder="avatars" là thư mục trên Cloudinary
+        upload_result = cloudinary.uploader.upload(file.file, folder="moto_world_avatars")
         
-    avatar_url = f"http://localhost:8000/{file_path}"
-    current_user.avatar = avatar_url
-    
-    db.add(current_user)
-    await db.commit()
-    return {"url": avatar_url}
+        # Lấy URL an toàn (https) từ kết quả trả về
+        avatar_url = upload_result.get("secure_url")
+        
+        # Cập nhật DB
+        current_user.avatar = avatar_url
+        db.add(current_user)
+        await db.commit()
+        
+        return {"url": avatar_url}
+        
+    except Exception as e:
+        print(f"Lỗi upload Cloudinary: {e}")
+        raise HTTPException(status_code=500, detail="Không thể upload ảnh, vui lòng thử lại sau.")
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     print("❌ VALIDATION ERROR CHI TIẾT:", exc.errors())
