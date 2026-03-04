@@ -1,43 +1,37 @@
-# File: backend/src/main.py
-# Chức năng: Entry point của ứng dụng FastAPI, cấu hình CORS, Cloudinary và các Router.
-# Logic: Đã chuyển đổi logic upload file local sang Cloudinary để phù hợp môi trường deploy.
-
 import os
-import uuid
 import shutil
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
+import uuid
+import cloudinary
+import cloudinary.uploader
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi import Request
-import cloudinary
-import cloudinary.uploader
 
 # --- IMPORT CONFIG & DATABASE ---
-from src.core.config import settings  # Import settings từ config
+from src.core.config import settings
 from src.database import get_db, engine, Base
-from src.auth import models as auth_models 
-from src.auth.utils import get_password_hash, verify_password 
-from src.auth.dependencies import get_current_user 
+from src.auth import models as auth_models
+from src.auth.utils import get_password_hash, verify_password
+from src.auth.dependencies import get_current_user
 
 # --- IMPORT ROUTERS ---
 from src.auth.router import router as auth_router
 from src.bikes.router import router as bikes_router
 from src.orders.router import router as orders_router
 from src.stats.router import router as stats_router
-from src.payment.router import router as payment_router 
+from src.payment.router import router as payment_router
 from src.coupons.router import router as coupons_router
 from src.users.router import router as users_router
 from src.logs.router import router as logs_router
-from src.notifications.router import router as notifications_router 
+from src.notifications.router import router as notifications_router
 from src.promo.router import router as promo_router
-from src.chat.router import router as chat_router 
+from src.chat.router import router as chat_router
 
 # --- CẤU HÌNH CLOUDINARY ---
-# Thiết lập kết nối Cloudinary dựa trên thông tin trong config.py
 cloudinary.config(
     cloud_name=settings.CLOUDINARY_CLOUD_NAME,
     api_key=settings.CLOUDINARY_API_KEY,
@@ -46,19 +40,19 @@ cloudinary.config(
 
 app = FastAPI(title="Moto World API", version="1.0.0")
 
-# --- CẤU HÌNH STATIC FILES (Giữ lại để tương thích ngược nếu cần, nhưng production nên dùng Cloudinary) ---
+# --- CẤU HÌNH STATIC FILES ---
+# Vẫn giữ để tương thích, nhưng file ảnh mới sẽ lên Cloudinary
 if not os.path.exists("static/uploads"):
     os.makedirs("static/uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- CẤU HÌNH CORS ---
-# Cho phép các domain frontend truy cập. Khi deploy, hãy thêm domain Vercel của bạn vào list này.
+# --- CẤU HÌNH CORS (QUAN TRỌNG) ---
 origins = [
-    "http://localhost:5173", 
-    "http://127.0.0.1:5173", 
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "https://moto-world-frontend.vercel.app", # Ví dụ domain frontend sau khi deploy
-    "*" # Lưu ý: Khi chạy chính thức nên hạn chế "*" và điền chính xác domain
+    "https://moto-world-frontend.vercel.app", # Link mẫu (bạn có thể thay bằng link thật)
+    "*"  # DÒNG NÀY QUAN TRỌNG: Cho phép tất cả các domain truy cập (tránh lỗi 100% khi mới deploy)
 ]
 
 app.add_middleware(
@@ -72,7 +66,7 @@ app.add_middleware(
 # --- KHỞI TẠO DATABASE ---
 @app.on_event("startup")
 async def startup():
-    # Lưu ý: Trên production, nên dùng Alembic để migrate DB thay vì create_all
+    # Tạo bảng nếu chưa có
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -120,21 +114,19 @@ async def upload_avatar(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Hàm upload avatar đã được sửa đổi để upload trực tiếp lên Cloudinary.
-    Điều này giải quyết vấn đề mất file khi deploy lên Render/Heroku.
+    Upload avatar lên Cloudinary để không bị mất ảnh khi Render restart
     """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Chỉ hỗ trợ định dạng hình ảnh")
 
     try:
         # Upload file lên Cloudinary
-        # file.file là file object, folder="avatars" là thư mục trên Cloudinary
         upload_result = cloudinary.uploader.upload(file.file, folder="moto_world_avatars")
         
-        # Lấy URL an toàn (https) từ kết quả trả về
+        # Lấy URL HTTPS
         avatar_url = upload_result.get("secure_url")
         
-        # Cập nhật DB
+        # Cập nhật Database
         current_user.avatar = avatar_url
         db.add(current_user)
         await db.commit()
