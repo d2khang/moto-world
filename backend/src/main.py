@@ -51,7 +51,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "https://moto-world-frontend.vercel.app", # Link mẫu (bạn có thể thay bằng link thật)
+    "https://moto-world.vercel.app", # Link mẫu (bạn có thể thay bằng link thật)
     "*"  # DÒNG NÀY QUAN TRỌNG: Cho phép tất cả các domain truy cập (tránh lỗi 100% khi mới deploy)
 ]
 
