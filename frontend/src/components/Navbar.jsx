@@ -94,13 +94,18 @@ export default function Navbar() {
       <div className="max-w-[90rem] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-20 gap-2">
 
-          {/* === 1. LOGO === */}
-          <Link to="/" className="group flex items-center gap-2 flex-shrink-0 relative z-20">
-            <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-blue-500 rounded-lg rotate-3 group-hover:rotate-12 transition-transform duration-300"></div>
-            <span className="text-2xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 group-hover:to-green-400 transition-all">
-              MOTO WORLD
-            </span>
-          </Link>
+                  {/* === 1. LOGO === */}
+                  <Link to="/" className="group flex items-center gap-2 flex-shrink-0 relative z-20">
+          <img 
+            src="/favicon.png" 
+            alt="Moto World Logo"
+            className="w-10 h-10 object-contain rotate-3 group-hover:rotate-6 transition-transform duration-300 drop-shadow-lg"
+          />
+          
+          <span className="text-2xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 group-hover:to-green-400 transition-all">
+            MOTO WORLD
+          </span>
+        </Link>
 
           {/* === 2. MENU CHÍNH === */}
           <div className="hidden lg:flex items-center gap-5 xl:gap-8 text-[11px] font-black uppercase tracking-widest text-slate-300 relative z-20">
