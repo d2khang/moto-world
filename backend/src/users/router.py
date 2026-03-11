@@ -1,15 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 
 # Import nội bộ
 from src.database import get_db
 from src.auth.models import User
 from src.users.schemas import UserCreate, UserResponse
-from src.auth.utils import get_password_hash
-from src.auth.dependencies import get_admin_user, get_current_user # Import thêm get_current_user
+from src.auth.utils import get_password_hash, verify_password
+from src.auth.dependencies import get_admin_user, get_current_user
 from src.logs.utils import create_audit_log      
 
 router = APIRouter()
@@ -17,6 +17,14 @@ router = APIRouter()
 # Schema dùng riêng cho việc cập nhật quyền (Role)
 class RoleUpdate(BaseModel):
     role: str  # Ví dụ: "admin" hoặc "user"
+
+# ✅ MỚI: Schema cập nhật profile
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    avatar: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
 
 # ==========================================
 # 1. ĐĂNG KÝ USER MỚI (Public)
@@ -58,6 +66,47 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
 @router.get("/me")
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+# ==========================================
+# ✅ MỚI: CẬP NHẬT THÔNG TIN CÁ NHÂN (PUT /me)
+# ==========================================
+@router.put("/me")
+async def update_profile(
+    data: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Cập nhật thông tin cơ bản
+    if data.full_name is not None:
+        current_user.full_name = data.full_name
+    if data.phone_number is not None:
+        current_user.phone_number = data.phone_number
+    if data.avatar is not None:
+        current_user.avatar = data.avatar
+
+    # Đổi mật khẩu nếu có
+    if data.new_password:
+        if not data.current_password:
+            raise HTTPException(status_code=400, detail="Vui lòng nhập mật khẩu hiện tại")
+        if not verify_password(data.current_password, current_user.hashed_password):
+            raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
+        if len(data.new_password) < 8:
+            raise HTTPException(status_code=400, detail="Mật khẩu mới phải có ít nhất 8 ký tự")
+        current_user.hashed_password = get_password_hash(data.new_password)
+
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "phone_number": current_user.phone_number,
+        "avatar": current_user.avatar,
+        "role": current_user.role
+    }
 
 # ==========================================
 # 3. LẤY DANH SÁCH USER (Admin Only)
@@ -143,7 +192,7 @@ async def change_user_role(
     return {"message": f"Đã cập nhật quyền thành {role_data.role}"}
 
 # ==========================================
-# 6. XÓA TÀI KHOẢN (Admin Only) -> MỚI THÊM
+# 6. XÓA TÀI KHOẢN (Admin Only)
 # ==========================================
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
@@ -160,19 +209,15 @@ async def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User không tồn tại.")
 
-    # 3. (Tuỳ chọn) Không cho xóa Admin khác để an toàn
-    # if user.role == "admin":
-    #     raise HTTPException(status_code=400, detail="Không thể xóa tài khoản Admin khác.")
-
-    # 4. Ghi Log trước khi xóa
+    # 3. Ghi Log trước khi xóa
     await create_audit_log(
         db, admin.id, admin.username,
         action="DELETE_USER", target_type="USER", target_id=user_id,
         details={"deleted_user": user.username, "deleted_email": user.email}
     )
 
-    # 5. Xóa và Lưu
+    # 4. Xóa và Lưu
     await db.delete(user)
     await db.commit()
     
-    return None # 204 No Content không trả về body
+    return None  # 204 No Content không trả về body
